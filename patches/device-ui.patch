@@ -6878,16 +6878,19 @@ index 0000000..7bc8d03
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..7bcd461
+index 0000000..9d1264d
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,644 @@
+@@ -0,0 +1,661 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsView.h"
 +#include "graphics/common/LoRaPresets.h"
 +#include "graphics/common/Ringtones.h"
++#if defined(ARDUINO_ARCH_ESP32)
++#include "esp_heap_caps.h"
++#endif
 +#include "graphics/common/ViewController.h"
 +#include "graphics/driver/DisplayDriver.h"
 +#include "graphics/driver/DisplayDriverFactory.h"
@@ -6957,6 +6960,20 @@ index 0000000..7bcd461
 +        ui.tick((uint32_t)now);
 +    }
 +    ui.service(); // street map tiles finished by the background worker
++
++#if defined(ARDUINO_ARCH_ESP32)
++    // one line a minute so memory headroom can be read from the serial log
++    static time_t lastMemLog = 0;
++    if (now - lastMemLog >= 60) {
++        lastMemLog = now;
++        lv_mem_monitor_t mon;
++        lv_mem_monitor(&mon);
++        ILOG_INFO("Hoptics mem: heap %u free (min %u), PSRAM %u free (largest %u), LVGL %u/%u KB used",
++                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
++                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
++                  (unsigned)((mon.total_size - mon.free_size) / 1024), (unsigned)(mon.total_size / 1024));
++    }
++#endif
 +
 +    // Wi-Fi / MQTT state is only sent when asked (the stock UI asks every 10 s too); without this the
 +    // settings page would say "connecting..." forever and never show the IP or "MQTT up"

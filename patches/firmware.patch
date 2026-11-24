@@ -489,3 +489,38 @@ index 704813c..13bb361 100644
  }
  #endif
  
+diff --git a/src/modules/TrafficManagementModule.h b/src/modules/TrafficManagementModule.h
+index 44d2400..c4311cb 100644
+--- a/src/modules/TrafficManagementModule.h
++++ b/src/modules/TrafficManagementModule.h
+@@ -191,7 +191,16 @@ class TrafficManagementModule : public MeshModule, private concurrency::OSThread
+     // NodeInfo cache (PSRAM-backed on hardware, heap in native tests): flat payload array,
+     // linear scan, trust/membership-tiered LRU eviction on insert. NodeInfo traffic is
+     // low-rate, so full scans are fine.
+-    static constexpr uint16_t kNodeInfoCacheEntries = 2000;
++#ifndef TMM_NODEINFO_CACHE_ENTRIES
++#if defined(HOPTICS_UI) && defined(RAM_SIZE) && RAM_SIZE < 2048
++    // Hoptics MT: the V4 kit has 2 MB of PSRAM and the touch UI needs most of it; 2000 entries
++    // (248 KB) left ~90 KB free, and an MQTT downlink full of nodes then ran it out of memory.
++#define TMM_NODEINFO_CACHE_ENTRIES 400
++#else
++#define TMM_NODEINFO_CACHE_ENTRIES 2000
++#endif
++#endif
++    static constexpr uint16_t kNodeInfoCacheEntries = TMM_NODEINFO_CACHE_ENTRIES;
+     /// NodeInfo cache capacity.
+     static constexpr uint16_t nodeInfoTargetEntries() { return kNodeInfoCacheEntries; }
+ 
+diff --git a/variants/esp32s3/heltec_v4/platformio.ini b/variants/esp32s3/heltec_v4/platformio.ini
+index 73a863d..552c04b 100644
+--- a/variants/esp32s3/heltec_v4/platformio.ini
++++ b/variants/esp32s3/heltec_v4/platformio.ini
+@@ -69,7 +69,7 @@ build_flags =
+   -D HAS_SCREEN=1
+   -D HAS_TFT=1
+   -D MAP_TILES_GREY ; required for 2MB PSRAM
+-  -D RAM_SIZE=1432
++  -D RAM_SIZE=1152 ; Hoptics MT: UI peaks well under this; the rest of the 2 MB PSRAM is for Wi-Fi, MQTT and nodes
+   -D LV_CACHE_DEF_SIZE=0
+   -D LV_LVGL_H_INCLUDE_SIMPLE
+   -D LV_CONF_INCLUDE_SIMPLE
