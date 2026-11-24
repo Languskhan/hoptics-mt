@@ -38,9 +38,10 @@ is upstream Meshtastic 2.8.3, unchanged.
   position, distance, an SNR history graph, and buttons for **DM**, **Trace route** and **Request position**.
 - **Stats**: channel load and airtime over time, packets per minute, RSSI/SNR of recent packets,
   nodes by hop count, traffic mix, and **top talkers** (who is using the airtime).
-- **Settings** (gear icon): theme, brightness, screen timeout, message pop-ups, names, region, preset,
-  role, Bluetooth (with a fresh random PIN shown on screen), web chat sharing, reboot and power off
-  (two-tap confirm).
+- **Settings** (gear icon): theme, brightness, screen timeout, message pop-ups and **message sound**
+  (each plays a sample), names, region, preset, role, Wi-Fi, Bluetooth (with a fresh random PIN shown
+  on screen), street map, web chat sharing, reboot and power off (two-tap confirm), and
+  **Report a problem** (see below).
 - **City locator** (offline, like WADAMESH): a "Now in <town>" pop-up when you arrive somewhere new,
   your town on Home, and "Near: 13 km NE of <town>" for other nodes. Uses GeoNames towns of 5,000+
   people built into the firmware, so it needs no internet. It's also shown on the web page.
@@ -57,9 +58,15 @@ InfluxDB or a spreadsheet. See [Discord / logging](#discord--logging).
 
 ## Install (easiest)
 
-Open the **one-click installer** page (GitHub Pages for this repo, live once the repo is public) in Chrome
-or Edge, plug the kit in, hold USER, tap RST, and press **Install** for your kit. Choose **Erase** the first
-time. That's it: the setup wizard takes over on the screen. Updates use the same page without erasing.
+Download the zip from the latest [release](https://github.com/Languskhan/hoptics-mt/releases), unzip it
+and open **START HERE - install and test guide.html**. It walks through flashing from Chrome or Edge in
+about 10 minutes:
+- **Already on regular Meshtastic (2.6+)**: the Meshtastic Web Flasher can install the `.update.bin`
+  (folder icon next to Select Firmware, then **Update**). Your settings are kept.
+- **Anything else**: Espressif's ESP Tool page, `.factory.bin` at `0x0` plus `mt-esp32s3-ota.bin` at
+  `0x650000`.
+
+The setup wizard takes over on the screen after that.
 
 ## Flashing by hand
 
@@ -82,6 +89,22 @@ The official Meshtastic web client normally served at `http://<node-ip>/` lives 
 image that this build doesn't ship. Use https://client.meshtastic.org, the phone apps, or `/hoptics`.
 
 Flashing back to stock Meshtastic works as usual (web flasher, "Heltec V4 TFT", MUI on).
+
+## Reporting problems
+
+- **On the radio**: Settings → DEVICE → **Report a problem** shows a QR code. Scan it with your phone and
+  GitHub opens a bug report with the firmware version, build, board, uptime and free memory already
+  filled in. Add what you were doing and submit.
+- **After a crash** the radio shows a **Crash report** screen by itself when it comes back up: what went
+  wrong (for example `abort() in loopTask, 12 s after start`), the crash address and backtrace from the
+  ESP32's core dump, and how much memory was free just before. Its QR code files the report. It also
+  spots restart loops ("It keeps restarting") and power dips (brownouts). Settings → DEVICE keeps
+  showing the last crash until you clear it.
+- **No GitHub account?** Take a photo of the report screen: the same details are printed under the code.
+- Reports never include your node number, position or Wi-Fi name, and nothing is sent from the radio.
+- Each build keeps its symbol file (`.elf`, attached to releases and kept 90 days with build
+  artifacts), so the addresses in a report can be turned into function names:
+  `xtensa-esp32s3-elf-addr2line -pfiaC -e hoptics-mt-<board>-mt2.8.3.elf 0x421e9caf 0x421e9ce4 ...`
 
 ## Updates, stable and beta
 
@@ -137,6 +160,8 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 - `.github/workflows/build.yml`: fetches pinned upstream firmware and device-ui, applies the patches,
   and builds both boards.
 - `harness/`: renders every screen on a PC with fake data (that's how the screenshots were made).
+- `.github/ISSUE_TEMPLATE/bug.yml`: the bug report form the radio's QR codes open (its field ids match
+  the link the radio builds).
   Measured LVGL memory: about 350 KB in use of the V4 kit's 1.4 MB pool, peaking at about 700 KB during
   a theme switch, with no growth after repeated switches.
 
@@ -156,8 +181,10 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
-v0.1.0: the UI has been rendered and exercised on a PC, and the adapter compiles against device-ui.
-**Not yet tested on hardware.** The ESP32 builds run in GitHub Actions. First-flash feedback welcome.
+v0.2.1: running on both kits (V4 Expansion Kit and V4-R8 Expansion Kit V2). Street map, message sounds,
+Wi-Fi status and the V4's memory fix are tested on hardware; problem reports are new in this version.
+The ESP32 builds run in GitHub Actions. Feedback welcome: use **Report a problem** on the radio, or
+[open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
 
 **Next (planned)**: Wi-Fi file manager for the V4-R8's SD card (logs, map tiles), and optional offline
 map tiles on the R8.
