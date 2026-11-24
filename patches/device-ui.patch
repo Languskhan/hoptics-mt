@@ -592,10 +592,10 @@ index 71cbee1..a0f7440 100644
  #define LV_USE_CHECKBOX 1
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..1e826fc
+index 0000000..3e980ca
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,4022 @@
+@@ -0,0 +1,4024 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3212,35 +3212,28 @@ index 0000000..1e826fc
 +    lv_obj_t *btl = label(btr, &F14, C_TEXT, LV_SYMBOL_BLUETOOTH " Bluetooth");
 +    lv_obj_set_flex_grow(btl, 1);
 +    oneLine(btl);
-+    // Bluetooth and this screen cannot run together (the firmware hands the radio to the app), so this is a
-+    // mode switch with a confirm, not an on/off toggle that silently freezes the screen
-+    setBt = flatButton(btr, "Phone mode", C_BLUE, 110, 30);
++    // Hoptics firmware keeps this screen running with Bluetooth on (the screen has its own packet queue),
++    // so this is a plain switch; the radio restarts to apply it
++    setBt = lv_switch_create(btr);
++    lv_obj_set_style_bg_color(setBt, C_BLUE, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    lv_obj_add_event_cb(
 +        setBt,
 +        [](lv_event_t *e) {
 +            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
-+            lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
-+            if (lv_obj_has_state(b, LV_STATE_USER_1)) {
-+                if (ui->cbs.enterPhoneMode)
-+                    ui->cbs.enterPhoneMode();
++            if (ui->settingsLoading)
 +                return;
-+            }
-+            lv_obj_add_state(b, LV_STATE_USER_1);
-+            setButtonText(b, "Tap again");
-+            lv_timer_t *t = lv_timer_create(
-+                [](lv_timer_t *t) {
-+                    lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
-+                    lv_obj_remove_state(btn, LV_STATE_USER_1);
-+                    setButtonText(btn, "Phone mode");
-+                },
-+                3000, b);
-+            lv_timer_set_repeat_count(t, 1);
++            bool on = lv_obj_has_state(ui->setBt, LV_STATE_CHECKED);
++            if (ui->cbs.setBluetooth)
++                ui->cbs.setBluetooth(on);
++            ui->showToast(on ? LV_SYMBOL_BLUETOOTH " Bluetooth on - restarting. The PIN shows here after."
++                             : LV_SYMBOL_BLUETOOTH " Bluetooth off - restarting",
++                          5000);
 +        },
-+        LV_EVENT_CLICKED, this);
-+    setBtPin = label(cp, &F12, C_DIM, "");
++        LV_EVENT_VALUE_CHANGED, this);
++    setBtPin = label(cp, &F16, C_BLUE, "");
 +    lv_obj_t *bth = label(cp, FSMALL, C_DIM,
-+                          "Phone mode turns Bluetooth on for the Meshtastic app and restarts. The touch screen pauses "
-+                          "and shows a PIN; tap Back to touch screen to return. Turns Wi-Fi off.");
++                          "Pair the Meshtastic app with this PIN. The screen keeps working while the app is "
++                          "connected. Bluetooth turns Wi-Fi off.");
 +    lv_obj_set_width(bth, LV_PCT(100));
 +    lv_label_set_long_mode(bth, LV_LABEL_LONG_MODE_WRAP);
 +
@@ -3345,6 +3338,10 @@ index 0000000..1e826fc
 +        lv_obj_add_state(setBanner, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setBanner, LV_STATE_CHECKED);
++    if (bluetoothOn)
++        lv_obj_add_state(setBt, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setBt, LV_STATE_CHECKED);
 +    if (!hasBluetooth)
 +        lv_obj_add_state(setBt, LV_STATE_DISABLED);
 +    lv_dropdown_set_selected(setThemeDd, (uint32_t)themeIdx);
@@ -3352,7 +3349,12 @@ index 0000000..1e826fc
 +        lv_obj_add_state(setWebChatSw, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setWebChatSw, LV_STATE_CHECKED);
-+    lv_label_set_text(setBtPin, hasBluetooth ? "Off while you use the touch screen" : "No Bluetooth on this device");
++    if (!hasBluetooth)
++        lv_label_set_text(setBtPin, "No Bluetooth on this device");
++    else if (bluetoothOn && btPin)
++        lv_label_set_text_fmt(setBtPin, LV_SYMBOL_BLUETOOTH "  PIN  %06u", (unsigned)btPin);
++    else
++        lv_label_set_text(setBtPin, bluetoothOn ? LV_SYMBOL_BLUETOOTH "  PIN: random (set on pairing)" : "Bluetooth is off");
 +    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
 +    lv_dropdown_set_selected(setPresetDd, optIndex(PRESETS, preset));
 +    lv_dropdown_set_selected(setRoleDd, optIndex(ROLES, role));
@@ -4620,10 +4622,10 @@ index 0000000..1e826fc
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..6e2df92
+index 0000000..db7d40b
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,556 @@
+@@ -0,0 +1,561 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -4868,6 +4870,11 @@ index 0000000..6e2df92
 +        controller->sendConfig(std::move(l), ownNode);
 +    };
 +    cb.setBluetooth = [this](bool on) {
++        if (on && haveNetwork && network.wifi_enabled) {
++            meshtastic_Config_NetworkConfig n = network;
++            n.wifi_enabled = false; // Wi-Fi and Bluetooth exclude each other on ESP32 Meshtastic
++            controller->sendConfig(std::move(n), ownNode);
++        }
 +        meshtastic_Config_BluetoothConfig b = bluetooth;
 +        b.enabled = on;
 +        if (on) {
