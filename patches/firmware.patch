@@ -14,6 +14,192 @@ index 2b58bd1..a3e836a 100644
      if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
          tftSetup();
      }
+diff --git a/src/mesh/MeshService.cpp b/src/mesh/MeshService.cpp
+index 4cd0bdc..f7185e7 100644
+--- a/src/mesh/MeshService.cpp
++++ b/src/mesh/MeshService.cpp
+@@ -68,6 +68,10 @@ Allocator<meshtastic_QueueStatus> &queueStatusPool = staticQueueStatusPool;
+ 
+ #include "PositionPrecision.h"
+ #include "Router.h"
++#ifdef HOPTICS_SCREEN_COPIES
++#include "PhoneAPI.h"
++bool hopticsScreenAttached = false;
++#endif
+ 
+ MeshService::MeshService()
+ #ifdef ARCH_PORTDUINO
+@@ -540,6 +544,27 @@ void MeshService::sendToPhone(meshtastic_MeshPacket *p)
+         return;
+     }
+ 
++#ifdef HOPTICS_SCREEN_COPIES
++    if (hopticsScreenAttached) {
++        meshtastic_MeshPacket *copy = packetPool.allocCopy(*p, 0);
++        if (copy) {
++            if (toScreenQueue.numFree() == 0) { // screen fell behind: it wants the newest traffic
++                meshtastic_MeshPacket *d = toScreenQueue.dequeuePtr(0);
++                if (d)
++                    releaseToPool(d);
++            }
++            if (!toScreenQueue.enqueue(copy, 0))
++                releaseToPool(copy);
++        }
++        if (PhoneAPI::hopticsExternalClientCount() == 0) {
++            // only the screen is listening: don't park packets for an app that is not connected
++            releaseToPool(p);
++            fromNum++;
++            return;
++        }
++    }
++#endif
++
+ #ifdef ARCH_ESP32
+ #if !MESHTASTIC_EXCLUDE_STOREFORWARD
+     if (moduleConfig.store_forward.enabled && storeForwardModule && storeForwardModule->isServer() &&
+diff --git a/src/mesh/MeshService.h b/src/mesh/MeshService.h
+index 6e96d20..b8afe81 100644
+--- a/src/mesh/MeshService.h
++++ b/src/mesh/MeshService.h
+@@ -33,6 +33,14 @@ extern Allocator<meshtastic_ClientNotification> &clientNotificationPool;
+  * Top level app for this service.  keeps the mesh, the radio config and the queue of received packets.
+  *
+  */
++#if defined(HOPTICS_UI) && defined(USE_PACKET_API) && !defined(ARCH_PORTDUINO)
++// Hoptics MT: the built-in screen gets its own copy of every packet, so it keeps working while the
++// phone app is connected over Bluetooth or Wi-Fi. Stock builds instead share one queue between all
++// API clients and pause the screen ("programming mode") whenever Bluetooth is on.
++#define HOPTICS_SCREEN_COPIES 1
++extern bool hopticsScreenAttached; // set by PacketAPI (the built-in screen's API) when it is created
++#endif
++
+ class MeshService
+ {
+ #if HAS_GPS
+@@ -48,6 +56,9 @@ class MeshService
+ #else
+     StaticPointerQueue<meshtastic_MeshPacket, MAX_RX_TOPHONE> toPhoneQueue;
+ #endif
++#ifdef HOPTICS_SCREEN_COPIES
++    StaticPointerQueue<meshtastic_MeshPacket, MAX_RX_TOPHONE> toScreenQueue;
++#endif
+ 
+     // keep list of QueueStatus packets to be send to the phone
+ #ifdef ARCH_PORTDUINO
+@@ -127,6 +138,10 @@ class MeshService
+     /// Return the next packet destined to the phone.  FIXME, somehow use fromNum to allow the phone to retry the
+     /// last few packets if needs to.
+     meshtastic_MeshPacket *getForPhone() { return toPhoneQueue.dequeuePtr(0); }
++#ifdef HOPTICS_SCREEN_COPIES
++    /// Next packet copy for the built-in screen (its private queue, see HOPTICS_SCREEN_COPIES)
++    meshtastic_MeshPacket *getForScreen() { return toScreenQueue.dequeuePtr(0); }
++#endif
+ 
+     /// Allows the bluetooth handler to free packets after they have been sent
+     void releaseToPool(meshtastic_MeshPacket *p) { packetPool.release(p); }
+diff --git a/src/mesh/PhoneAPI.cpp b/src/mesh/PhoneAPI.cpp
+index ea9c195..2521415 100644
+--- a/src/mesh/PhoneAPI.cpp
++++ b/src/mesh/PhoneAPI.cpp
+@@ -336,8 +336,18 @@ PhoneAPI::~PhoneAPI()
+ #endif
+ }
+ 
++#if defined(HOPTICS_UI)
++std::atomic<int> PhoneAPI::hopticsExternalClients{0};
++#endif
++
+ void PhoneAPI::handleStartConfig()
+ {
++#if defined(HOPTICS_UI)
++    if (api_type != TYPE_PACKET && !hopticsCounted) {
++        hopticsCounted = true;
++        hopticsExternalClients++;
++    }
++#endif
+     // Must be before setting state (because state is how we know !connected)
+     if (!isConnected()) {
+         onConnectionChanged(true);
+@@ -432,6 +442,12 @@ void PhoneAPI::handleStartConfig()
+ void PhoneAPI::close()
+ {
+     LOG_DEBUG("PhoneAPI::close()");
++#if defined(HOPTICS_UI)
++    if (hopticsCounted) {
++        hopticsCounted = false;
++        hopticsExternalClients--;
++    }
++#endif
+     if (service->api_state == service->STATE_BLE && api_type == TYPE_BLE)
+         service->api_state = service->STATE_DISCONNECTED;
+     else if (service->api_state == service->STATE_WIFI && api_type == TYPE_WIFI)
+@@ -1797,6 +1813,17 @@ bool PhoneAPI::available()
+         prefetchNodeInfos();
+         return true;
+     case STATE_SEND_PACKETS: {
++#ifdef HOPTICS_SCREEN_COPIES
++        if (api_type == TYPE_PACKET) {
++            // The built-in screen reads only its own packet copies. Queue status, MQTT proxy, client
++            // notifications, XModem and Store&Forward replies stay in the shared queues for the phone app.
++            if (!packetForPhone)
++                packetForPhone = service->getForScreen();
++            if (packetForPhone)
++                return true;
++            return replayPending();
++        }
++#endif
+         if (!queueStatusPacketForPhone)
+             queueStatusPacketForPhone = service->getQueueStatusForPhone();
+         if (!mqttClientProxyMessageForPhone)
+diff --git a/src/mesh/PhoneAPI.h b/src/mesh/PhoneAPI.h
+index 9d26f32..daeac4b 100644
+--- a/src/mesh/PhoneAPI.h
++++ b/src/mesh/PhoneAPI.h
+@@ -189,6 +189,10 @@ class PhoneAPI
+     bool available();
+ 
+     bool isConnected() { return state != STATE_SEND_NOTHING; }
++#if defined(HOPTICS_UI)
++    /// API clients other than the built-in screen (phone app over BLE / Wi-Fi / serial / HTTP) now connected
++    static int hopticsExternalClientCount() { return hopticsExternalClients.load(); }
++#endif
+     bool isSendingPackets() { return state == STATE_SEND_PACKETS; }
+ 
+ #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
+@@ -275,6 +279,11 @@ class PhoneAPI
+ 
+     APIType api_type = TYPE_NONE;
+ 
++#if defined(HOPTICS_UI)
++    static std::atomic<int> hopticsExternalClients;
++    bool hopticsCounted = false; // this connection is included in hopticsExternalClients
++#endif
++
+ #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
+     // No per-instance auth members - see method-level note. All state lives
+     // in a file-scope slot table in PhoneAPI.cpp keyed by `this` pointer.
+diff --git a/src/mesh/api/PacketAPI.cpp b/src/mesh/api/PacketAPI.cpp
+index 3590cfd..c842070 100644
+--- a/src/mesh/api/PacketAPI.cpp
++++ b/src/mesh/api/PacketAPI.cpp
+@@ -31,12 +31,16 @@ PacketAPI::PacketAPI(PacketServer *_server)
+     : concurrency::OSThread("PacketAPI"), isConnected(false), programmingMode(false), server(_server)
+ {
+     api_type = TYPE_PACKET;
++#ifdef HOPTICS_SCREEN_COPIES
++    hopticsScreenAttached = true;
++#endif
+ }
+ 
+ int32_t PacketAPI::runOnce()
+ {
+     bool success = false;
+-#ifndef ARCH_PORTDUINO
++#if !defined(ARCH_PORTDUINO) && !defined(HOPTICS_SCREEN_COPIES)
++    // (Hoptics MT keeps the screen running with Bluetooth on: it has its own packet queue, see MeshService.h)
+     if (config.bluetooth.enabled) {
+         if (!programmingMode) {
+             // in programmingMode we don't send any packets to the client except this one notify
 diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
 index 7f9fbc4..b0dc918 100644
 --- a/src/mesh/http/ContentHandler.cpp
