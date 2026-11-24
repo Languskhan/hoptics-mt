@@ -107,7 +107,7 @@ jobs:
       - name: Build
         working-directory: fw
         env:
-          PLATFORMIO_BUILD_FLAGS: -DHOPTICS_UI ${{ matrix.flags }}
+          PLATFORMIO_BUILD_FLAGS: -DHOPTICS_UI -DHOPTICS_BUILD=${{ github.run_number }} ${{ matrix.flags }} # build number shows in problem reports
           UV_CONSTRAINT: ${{ runner.temp }}/pio-constraints.txt # the platform installs its own tools with uv
           PIP_CONSTRAINT: ${{ runner.temp }}/pio-constraints.txt # ...or pip as a fallback
         run: pio run -e ${{ matrix.env }}
@@ -148,7 +148,7 @@ jobs:
         with:
           name: hoptics-mt-${{ matrix.board }}${{ (inputs.channel && inputs.channel != 'tested') && format('-{0}', inputs.channel) || '' }}-symbols
           path: elf/*.elf
-          retention-days: 30
+          retention-days: 90 # long enough to decode crash reports from testers
           if-no-files-found: warn
 
       - name: Attach to release
@@ -158,6 +158,8 @@ jobs:
         run: |
           cd out/hoptics-mt-${{ matrix.board }}
           for f in *.bin; do gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber -R "${{ github.repository }}"; done
+          # symbols too, so crash reports for this release can always be decoded
+          for e in ../../elf/*.elf; do [ -f "$e" ] && gh release upload "${{ github.event.release.tag_name }}" "$e" --clobber -R "${{ github.repository }}"; done
           mv SHA256SUMS.txt SHA256SUMS-${{ matrix.board }}.txt
           gh release upload "${{ github.event.release.tag_name }}" SHA256SUMS-${{ matrix.board }}.txt --clobber -R "${{ github.repository }}"
 
