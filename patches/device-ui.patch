@@ -1,9 +1,9 @@
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..02dda48
+index 0000000..69f1867
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,440 @@
+@@ -0,0 +1,447 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -155,6 +155,9 @@ index 0000000..02dda48
 +        std::function<void(int region)> setRegion;
 +        std::function<void(int preset)> setPreset;
 +        std::function<void(bool on)> setBluetooth;
++        // phone app mode: Bluetooth on for the Meshtastic app; the firmware stops feeding the screen
++        std::function<void(void)> enterPhoneMode;
++        std::function<void(void)> leavePhoneMode;
 +        std::function<void(void)> reboot;
 +        std::function<void(void)> shutdown;
 +        std::function<void(uint32_t convKey)> conversationRead;
@@ -194,6 +197,9 @@ index 0000000..02dda48
 +                  int8_t txPower, float freqMHz);
 +    void setDeviceRole(int role);
 +    void setBluetoothEnabled(bool on, uint32_t fixedPin = 0);
++    // full-screen "phone app mode" page (Bluetooth on, screen paused); restarting = on the way in or out
++    void showPhoneMode(uint32_t pin, bool restarting);
++    bool inPhoneMode(void) const { return phoneScreen != nullptr; }
 +    void setNetwork(bool wifiOn, bool wifiUp, uint32_t ip, bool mqttUp, int32_t wifiRssi);
 +    void setTheme(int theme); // rebuilds the main screen if it exists
 +    int theme(void) const { return themeIdx; }
@@ -345,6 +351,7 @@ index 0000000..02dda48
 +
 +    // ---------- widgets ----------
 +    lv_obj_t *bootScreen = nullptr, *bootStatus = nullptr;
++    lv_obj_t *phoneScreen = nullptr, *phoneMsg = nullptr, *phonePin = nullptr, *phoneBtn = nullptr;
 +    lv_obj_t *mainScreen = nullptr;
 +    lv_obj_t *statusTime = nullptr, *statusName = nullptr, *statusBatt = nullptr, *statusMsg = nullptr, *statusLink = nullptr,
 +             *statusMqtt = nullptr, *statusBt = nullptr;
@@ -446,10 +453,10 @@ index 0000000..02dda48
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..f0b7199
+index 0000000..44dac28
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,89 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -512,6 +519,7 @@ index 0000000..f0b7199
 +
 +  private:
 +    void wireCallbacks(void);
++    void armRebootFallback(void);
 +    void storeUI(void);
 +    uint32_t convKeyFor(uint32_t from, uint32_t to, uint8_t ch) const;
 +    uint8_t nodeChannel(uint32_t num) const;
@@ -584,10 +592,10 @@ index 71cbee1..a0f7440 100644
  #define LV_USE_CHECKBOX 1
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..acc15d4
+index 0000000..1e826fc
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,3943 @@
+@@ -0,0 +1,4022 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -1447,6 +1455,78 @@ index 0000000..acc15d4
 +{
 +    if (bootStatus)
 +        lv_label_set_text(bootStatus, text);
++}
++
++// ================================================================= phone app mode
++// With Bluetooth on, the firmware's PacketAPI stops feeding the built-in screen ("programming mode") so the
++// phone app owns the radio. This page says so, shows the pairing PIN and offers the way back.
++void HopticsUI::showPhoneMode(uint32_t pin, bool restarting)
++{
++    if (!phoneScreen) {
++        initFonts();
++        phoneScreen = lv_obj_create(NULL);
++        lv_obj_remove_flag(phoneScreen, LV_OBJ_FLAG_SCROLLABLE);
++        lv_obj_set_style_bg_color(phoneScreen, C_BG, 0);
++        lv_obj_set_style_bg_grad_color(phoneScreen, C_CARD2, 0);
++        lv_obj_set_style_bg_grad_dir(phoneScreen, LV_GRAD_DIR_VER, 0);
++        lv_obj_set_style_pad_all(phoneScreen, 14, 0);
++        lv_obj_set_flex_flow(phoneScreen, LV_FLEX_FLOW_COLUMN);
++        lv_obj_set_flex_align(phoneScreen, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++        lv_obj_set_style_pad_row(phoneScreen, 10, 0);
++
++        lv_obj_t *icon = label(phoneScreen, &F20, C_BLUE, LV_SYMBOL_BLUETOOTH);
++        lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
++        lv_obj_t *title = label(phoneScreen, &F20, C_TEXT, "Phone app mode");
++        (void)title;
++        phoneMsg = label(phoneScreen, &F14, C_DIM, "");
++        lv_obj_set_width(phoneMsg, LV_PCT(100));
++        lv_label_set_long_mode(phoneMsg, LV_LABEL_LONG_MODE_WRAP);
++        lv_obj_set_style_text_align(phoneMsg, LV_TEXT_ALIGN_CENTER, 0);
++        phonePin = label(phoneScreen, &F20, C_BLUE, "");
++        lv_obj_set_style_text_font(phonePin, &lv_font_montserrat_28, 0);
++        phoneBtn = flatButton(phoneScreen, LV_SYMBOL_HOME " Back to touch screen", C_GREEN, W() - 28, 44);
++        // two-tap confirm, like Reboot: the first tap arms the button for 3 s
++        lv_obj_add_event_cb(
++            phoneBtn,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
++                if (lv_obj_has_state(b, LV_STATE_USER_1)) {
++                    if (ui->cbs.leavePhoneMode)
++                        ui->cbs.leavePhoneMode();
++                    ui->showPhoneMode(0, true);
++                    return;
++                }
++                lv_obj_add_state(b, LV_STATE_USER_1);
++                setButtonText(b, "Tap again to restart");
++                lv_timer_t *t = lv_timer_create(
++                    [](lv_timer_t *t) {
++                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
++                        lv_obj_remove_state(btn, LV_STATE_USER_1);
++                        setButtonText(btn, LV_SYMBOL_HOME " Back to touch screen");
++                    },
++                    3000, b);
++                lv_timer_set_repeat_count(t, 1);
++            },
++            LV_EVENT_CLICKED, this);
++        lv_screen_load(phoneScreen);
++        // the boot and main screens stay alive underneath; the radio restarts out of this mode anyway
++    }
++    if (restarting) {
++        lv_label_set_text(phoneMsg, pin ? "Restarting with Bluetooth on for the Meshtastic app..."
++                                        : "Restarting back to the touch screen...");
++        lv_obj_add_flag(phoneBtn, LV_OBJ_FLAG_HIDDEN);
++    } else {
++        lv_label_set_text(phoneMsg, "Bluetooth is on for the Meshtastic app. The touch screen is paused while the app "
++                                    "is in charge. Pair the app with this PIN:");
++        lv_obj_remove_flag(phoneBtn, LV_OBJ_FLAG_HIDDEN);
++    }
++    if (pin)
++        lv_label_set_text_fmt(phonePin, "%06u", (unsigned)pin);
++    else if (!restarting)
++        lv_label_set_text(phonePin, "------");
++    else
++        lv_label_set_text(phonePin, "");
 +}
 +
 +// ================================================================= main
@@ -3131,22 +3211,36 @@ index 0000000..acc15d4
 +    row(btr, 6);
 +    lv_obj_t *btl = label(btr, &F14, C_TEXT, LV_SYMBOL_BLUETOOTH " Bluetooth");
 +    lv_obj_set_flex_grow(btl, 1);
-+    setBt = lv_switch_create(btr);
-+    lv_obj_set_style_bg_color(setBt, C_BLUE, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    oneLine(btl);
++    // Bluetooth and this screen cannot run together (the firmware hands the radio to the app), so this is a
++    // mode switch with a confirm, not an on/off toggle that silently freezes the screen
++    setBt = flatButton(btr, "Phone mode", C_BLUE, 110, 30);
 +    lv_obj_add_event_cb(
 +        setBt,
 +        [](lv_event_t *e) {
 +            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
-+            if (ui->settingsLoading)
++            lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
++            if (lv_obj_has_state(b, LV_STATE_USER_1)) {
++                if (ui->cbs.enterPhoneMode)
++                    ui->cbs.enterPhoneMode();
 +                return;
-+            bool on = lv_obj_has_state(ui->setBt, LV_STATE_CHECKED);
-+            if (ui->cbs.setBluetooth)
-+                ui->cbs.setBluetooth(on);
-+            ui->showToast(on ? LV_SYMBOL_BLUETOOTH " Bluetooth on - rebooting" : LV_SYMBOL_BLUETOOTH " Bluetooth off - rebooting");
++            }
++            lv_obj_add_state(b, LV_STATE_USER_1);
++            setButtonText(b, "Tap again");
++            lv_timer_t *t = lv_timer_create(
++                [](lv_timer_t *t) {
++                    lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
++                    lv_obj_remove_state(btn, LV_STATE_USER_1);
++                    setButtonText(btn, "Phone mode");
++                },
++                3000, b);
++            lv_timer_set_repeat_count(t, 1);
 +        },
-+        LV_EVENT_VALUE_CHANGED, this);
-+    setBtPin = label(cp, &F16, C_BLUE, "");
-+    lv_obj_t *bth = label(cp, FSMALL, C_DIM, "Pair the Meshtastic app with this PIN. Wi-Fi on turns Bluetooth off.");
++        LV_EVENT_CLICKED, this);
++    setBtPin = label(cp, &F12, C_DIM, "");
++    lv_obj_t *bth = label(cp, FSMALL, C_DIM,
++                          "Phone mode turns Bluetooth on for the Meshtastic app and restarts. The touch screen pauses "
++                          "and shows a PIN; tap Back to touch screen to return. Turns Wi-Fi off.");
 +    lv_obj_set_width(bth, LV_PCT(100));
 +    lv_label_set_long_mode(bth, LV_LABEL_LONG_MODE_WRAP);
 +
@@ -3251,10 +3345,6 @@ index 0000000..acc15d4
 +        lv_obj_add_state(setBanner, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setBanner, LV_STATE_CHECKED);
-+    if (bluetoothOn)
-+        lv_obj_add_state(setBt, LV_STATE_CHECKED);
-+    else
-+        lv_obj_remove_state(setBt, LV_STATE_CHECKED);
 +    if (!hasBluetooth)
 +        lv_obj_add_state(setBt, LV_STATE_DISABLED);
 +    lv_dropdown_set_selected(setThemeDd, (uint32_t)themeIdx);
@@ -3262,10 +3352,7 @@ index 0000000..acc15d4
 +        lv_obj_add_state(setWebChatSw, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setWebChatSw, LV_STATE_CHECKED);
-+    if (bluetoothOn && btPin)
-+        lv_label_set_text_fmt(setBtPin, LV_SYMBOL_BLUETOOTH "  PIN  %06u", (unsigned)btPin);
-+    else
-+        lv_label_set_text(setBtPin, bluetoothOn ? LV_SYMBOL_BLUETOOTH "  PIN: random (set on pairing)" : "Bluetooth is off");
++    lv_label_set_text(setBtPin, hasBluetooth ? "Off while you use the touch screen" : "No Bluetooth on this device");
 +    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
 +    lv_dropdown_set_selected(setPresetDd, optIndex(PRESETS, preset));
 +    lv_dropdown_set_selected(setRoleDd, optIndex(ROLES, role));
@@ -4533,10 +4620,10 @@ index 0000000..acc15d4
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..bbc3a5a
+index 0000000..6e2df92
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,556 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -4784,11 +4871,37 @@ index 0000000..bbc3a5a
 +        meshtastic_Config_BluetoothConfig b = bluetooth;
 +        b.enabled = on;
 +        if (on) {
-+            // a fresh random PIN each time, shown in Settings - never the well-known default
++            // a fresh random PIN each time, shown on the phone-mode page - never the well-known default
 +            b.mode = meshtastic_Config_BluetoothConfig_PairingMode_FIXED_PIN;
 +            b.fixed_pin = randomPin();
 +        }
 +        controller->sendConfig(std::move(b), ownNode);
++    };
++    // Bluetooth on hands the radio to the phone app: PacketAPI stops feeding this screen until it is off again
++    // (firmware src/mesh/api/PacketAPI.cpp runOnce). Same sequence as the stock MUI enterProgrammingMode().
++    cb.enterPhoneMode = [this]() {
++        if (haveNetwork && network.wifi_enabled) {
++            meshtastic_Config_NetworkConfig n = network;
++            n.wifi_enabled = false; // Wi-Fi and Bluetooth exclude each other on ESP32 Meshtastic
++            controller->sendConfig(std::move(n), ownNode);
++        }
++        meshtastic_Config_BluetoothConfig b = bluetooth;
++        b.enabled = true;
++        b.mode = meshtastic_Config_BluetoothConfig_PairingMode_FIXED_PIN;
++        b.fixed_pin = randomPin();
++        bluetooth = b;
++        controller->sendConfig(meshtastic_Config_BluetoothConfig{b}, ownNode);
++        state = eWaitingForReboot;
++        ui.showPhoneMode(b.fixed_pin, true);
++        armRebootFallback();
++    };
++    cb.leavePhoneMode = [this]() {
++        meshtastic_Config_BluetoothConfig b = bluetooth;
++        b.enabled = false;
++        bluetooth = b;
++        controller->sendConfig(meshtastic_Config_BluetoothConfig{b}, ownNode); // the firmware saves and reboots
++        state = eWaitingForReboot;
++        armRebootFallback();
 +    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
@@ -4913,8 +5026,30 @@ index 0000000..bbc3a5a
 +{
 +    bluetooth = cfg;
 +    haveBt = true;
-+    ui.setBluetoothEnabled(cfg.enabled,
-+                           cfg.mode == meshtastic_Config_BluetoothConfig_PairingMode_FIXED_PIN ? cfg.fixed_pin : 0);
++    if (ownNode == 0 && id)
++        ownNode = id; // in phone mode this is the only packet we get, and it carries our node number
++    const uint32_t pin = cfg.mode == meshtastic_Config_BluetoothConfig_PairingMode_FIXED_PIN ? cfg.fixed_pin : 0;
++    ui.setBluetoothEnabled(cfg.enabled, pin);
++    // Bluetooth already on at boot: the firmware is in programming mode and will send nothing else, so show
++    // the phone-mode page with the way back instead of waiting forever on the splash (stock MUI does the same)
++    if (cfg.enabled && state <= eBootScreenDone && state != eWaitingForReboot && state != eProgrammingMode) {
++        ILOG_INFO("Hoptics: radio is in phone app mode (Bluetooth on)");
++        state = eProgrammingMode;
++        ui.showPhoneMode(pin, false);
++    }
++}
++
++void HopticsView::armRebootFallback(void)
++{
++    // the firmware reboots by itself after a Bluetooth change; if that ever does not happen, ask once more
++    lv_timer_t *t = lv_timer_create(
++        [](lv_timer_t *t) {
++            HopticsView *v = (HopticsView *)lv_timer_get_user_data(t);
++            ILOG_WARN("Hoptics: no reboot yet, requesting one");
++            v->controller->requestReboot(1, v->ownNode);
++        },
++        15000, this);
++    lv_timer_set_repeat_count(t, 1);
 +}
 +
 +void HopticsView::updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg)
