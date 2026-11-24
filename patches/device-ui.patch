@@ -439,10 +439,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..90491f8
+index 0000000..90766dd
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,477 @@
+@@ -0,0 +1,486 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -599,6 +599,8 @@ index 0000000..90491f8
 +        std::function<void(bool on, const char *ssid, const char *psk)> setWifi;
 +        // front-end LNA on boards that have one: meshtastic_Config_LoRaConfig_FEM_LNA_Mode value
 +        std::function<void(int mode)> setLnaMode;
++        // message sound: index into toneName() (0 = off)
++        std::function<void(int tone)> setRingtone;
 +        // phone app mode: Bluetooth on for the Meshtastic app; the firmware stops feeding the screen
 +        std::function<void(void)> enterPhoneMode;
 +        std::function<void(void)> leavePhoneMode;
@@ -643,6 +645,11 @@ index 0000000..90491f8
 +    void setBluetoothEnabled(bool on, uint32_t fixedPin = 0);
 +    void setWifiConfig(const char *ssid, bool hasPassword);
 +    void setLnaMode(int mode); // FEM_LNA_Mode: 0 off, 1 on, 2 not present, 3 auto
++    // message sounds offered in Settings (picked from device-ui's Meshtastic tone library)
++    static constexpr int kToneCount = 8;
++    static const char *toneName(int i);        // shown on screen
++    static const char *toneLibraryName(int i); // name in graphics/common/Ringtones.cpp
++    void setRingtone(int tone);                // -1 = a tone set elsewhere (phone app)
 +    // full-screen "phone app mode" page (Bluetooth on, screen paused); restarting = on the way in or out
 +    void showPhoneMode(uint32_t pin, bool restarting);
 +    bool inPhoneMode(void) const { return phoneScreen != nullptr; }
@@ -809,6 +816,8 @@ index 0000000..90491f8
 +    // ---------- widgets ----------
 +    lv_obj_t *bootScreen = nullptr, *bootStatus = nullptr;
 +    lv_obj_t *phoneScreen = nullptr, *phoneMsg = nullptr, *phonePin = nullptr, *phoneBtn = nullptr;
++    lv_obj_t *setToneDd = nullptr;
++    int toneIdx = 1;
 +    lv_obj_t *setWifiSw = nullptr, *setSsid = nullptr, *setPsk = nullptr, *setLnaDd = nullptr, *setLnaRow = nullptr;
 +    char wifiSsid[33] = {0};
 +    bool wifiHasPsk = false;
@@ -922,10 +931,10 @@ index 0000000..90491f8
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..44dac28
+index 0000000..8028fca
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,95 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -967,6 +976,9 @@ index 0000000..44dac28
 +    void updateLoRaConfig(const meshtastic_Config_LoRaConfig &cfg) override;
 +    void updateBluetoothConfig(const meshtastic_Config_BluetoothConfig &cfg, uint32_t id = 0) override;
 +    void updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg) override;
++    void updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg) override;
++    void updateExtNotificationModule(const meshtastic_ModuleConfig_ExternalNotificationConfig &cfg) override;
++    void updateRingtone(const char rtttl[231]) override;
 +
 +    void packetReceived(const meshtastic_MeshPacket &p) override;
 +    void newMessage(uint32_t from, uint32_t to, uint8_t ch, const char *msg, uint32_t &msgtime, bool restore = false) override;
@@ -1008,7 +1020,10 @@ index 0000000..44dac28
 +    bool mainShown = false;
 +    uint32_t bootStart = 0;
 +    uint32_t nodeCountSeen = 0;
-+    time_t lastTick = 0, lastSnapshot = 0;
++    time_t lastTick = 0, lastSnapshot = 0, lastConnPoll = 0;
++    bool mqttEnabled = false;
++    meshtastic_ModuleConfig_ExternalNotificationConfig extNotif{};
++    bool haveExtNotif = false;
 +    std::unordered_map<uint32_t, uint8_t> nodeChannels;
 +    std::unordered_map<uint32_t, bool> nodeHasKey;
 +
@@ -1061,14 +1076,15 @@ index 71cbee1..a0f7440 100644
  #define LV_USE_CHECKBOX 1
 diff --git a/source/graphics/TFT/HopticsTiles.cpp b/source/graphics/TFT/HopticsTiles.cpp
 new file mode 100644
-index 0000000..b4257f2
+index 0000000..6b086bc
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsTiles.cpp
-@@ -0,0 +1,1140 @@
+@@ -0,0 +1,1141 @@
 +/**
 + * Hoptics MT street map engine - see HopticsTiles.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsTiles.h"
++#include "graphics/view/TFT/HopticsUI.h" // HOPTICS_VERSION for the User-Agent
 +#include "util/ILog.h"
 +#include <PNGdec.h>
 +#include <algorithm>
@@ -2207,10 +2223,10 @@ index 0000000..b4257f2
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..f4710cc
+index 0000000..7bc8d03
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,4589 @@
+@@ -0,0 +1,4649 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -4776,6 +4792,36 @@ index 0000000..f4710cc
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
 +
++    // message sound: picking one plays it once on the buzzer
++    r = settingsRow(cd, "Message sound (plays a sample)");
++    setToneDd = lv_dropdown_create(r);
++    lv_obj_set_width(setToneDd, LV_PCT(100));
++    {
++        std::string opts;
++        for (int i = 0; i < kToneCount; i++) {
++            if (i)
++                opts += "\n";
++            opts += toneName(i);
++        }
++        lv_dropdown_set_options(setToneDd, opts.c_str());
++    }
++    styleDropdown(setToneDd);
++    lv_obj_add_event_cb(
++        setToneDd,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            int t = (int)lv_dropdown_get_selected(ui->setToneDd);
++            ui->toneIdx = t;
++            if (ui->cbs.setRingtone)
++                ui->cbs.setRingtone(t);
++            char b[48];
++            snprintf(b, sizeof(b), t ? LV_SYMBOL_AUDIO " Message sound: %s" : LV_SYMBOL_MUTE " Message sound off", toneName(t));
++            ui->showToast(b);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++
 +    // identity
 +    lv_obj_t *ci = card(body, "IDENTITY");
 +    r = settingsRow(ci, "Short name (4 max)");
@@ -5180,6 +5226,8 @@ index 0000000..f4710cc
 +        lv_obj_add_state(setWebChatSw, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setWebChatSw, LV_STATE_CHECKED);
++    if (toneIdx >= 0 && toneIdx < kToneCount)
++        lv_dropdown_set_selected(setToneDd, (uint32_t)toneIdx);
 +    if (mapTiles)
 +        lv_obj_add_state(setMapSw, LV_STATE_CHECKED);
 +    else
@@ -5749,6 +5797,34 @@ index 0000000..f4710cc
 +    }
 +}
 +
++// ================================================================= SOUNDS
++// Message sounds: a short pick from the tone library that ships with device-ui (Ringtones.cpp), so
++// nothing here is a new melody. The screen name is on the left, the library name on the right.
++namespace
++{
++const char *const kTones[HopticsUI::kToneCount][2] = {
++    {"Off", "Silent"},        {"Meshtastic", "Default"}, {"Text alert", "Text Alert"}, {"Pager", "Pager 1"},
++    {"Desk phone", "Desk Phone"}, {"Double ring", "Double Ring"}, {"Chime", "Peal"},       {"SOS (Morse)", "SOS"},
++};
++} // namespace
++
++const char *HopticsUI::toneName(int i)
++{
++    return (i >= 0 && i < kToneCount) ? kTones[i][0] : "Custom";
++}
++
++const char *HopticsUI::toneLibraryName(int i)
++{
++    return (i >= 0 && i < kToneCount) ? kTones[i][1] : nullptr;
++}
++
++void HopticsUI::setRingtone(int tone)
++{
++    toneIdx = tone;
++    if (setToneDd && tone >= 0 && tone < kToneCount && !settingsLoading)
++        lv_dropdown_set_selected(setToneDd, (uint32_t)tone);
++}
++
 +// ================================================================= MAP
 +// Live map: nodes that share GPS are plotted around you, on an OpenStreetMap street map when that is
 +// on (tiles come from hoptics::TileMap, see HopticsTiles.h). Range rings give scale, direct RF
@@ -6108,7 +6184,7 @@ index 0000000..f4710cc
 +    c.lat = cLat;
 +    c.lon = cLon;
 +    for (const auto &nd : nodes) {
-+        if (!nd.hasPos || nd.num == myNode)
++        if (!nd.hasPos || nd.num == myNode || nd.viaMqtt) // MQTT brings in nodes from far away; zoom out by hand for them
 +            continue;
 +        bool recent = nd.lastHeard && nd.lastHeard <= nowTs + 60 && nowTs - std::min(nowTs, nd.lastHeard) < 24 * 3600;
 +        if (!recent && clockValid)
@@ -6802,15 +6878,16 @@ index 0000000..f4710cc
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..72f91b2
+index 0000000..7bcd461
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,587 @@
+@@ -0,0 +1,644 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsView.h"
 +#include "graphics/common/LoRaPresets.h"
++#include "graphics/common/Ringtones.h"
 +#include "graphics/common/ViewController.h"
 +#include "graphics/driver/DisplayDriver.h"
 +#include "graphics/driver/DisplayDriverFactory.h"
@@ -6880,6 +6957,13 @@ index 0000000..72f91b2
 +        ui.tick((uint32_t)now);
 +    }
 +    ui.service(); // street map tiles finished by the background worker
++
++    // Wi-Fi / MQTT state is only sent when asked (the stock UI asks every 10 s too); without this the
++    // settings page would say "connecting..." forever and never show the IP or "MQTT up"
++    if (mainShown && haveNetwork && (network.wifi_enabled || mqttEnabled) && now - lastConnPoll >= 10) {
++        lastConnPoll = now;
++        controller->requestDeviceConnectionStatus();
++    }
 +    // refresh the web snapshot every 3 s (built here, on the UI task, so no locking of UI state is needed)
 +    if (mainShown && now - lastSnapshot >= 3) {
 +        lastSnapshot = now;
@@ -7114,6 +7198,28 @@ index 0000000..72f91b2
 +        controller->sendConfig(meshtastic_Config_LoRaConfig{l}, ownNode); // applied live, no restart
 +        controller->requestLoRaConfig(ownNode); // read back: boards without LNA control report "not present"
 +    };
++    cb.setRingtone = [this](int idx) {
++        const char *want = HopticsUI::toneLibraryName(idx);
++        const char *rtttl = nullptr;
++        for (int i = 0; want && i < numRingtones; i++)
++            if (strcmp(ringtone[i].name, want) == 0)
++                rtttl = ringtone[i].rtttl;
++        if (!rtttl)
++            return;
++        // the buzzer is on by default on these kits; switch it back on if someone turned it off
++        if (idx > 0 && haveExtNotif && (!extNotif.enabled || !extNotif.alert_message_buzzer || !extNotif.use_pwm)) {
++            extNotif.enabled = true;
++            extNotif.alert_message_buzzer = true;
++            extNotif.use_pwm = true;
++            controller->sendConfig(meshtastic_ModuleConfig_ExternalNotificationConfig{extNotif}, ownNode);
++            ui.showToast(LV_SYMBOL_AUDIO " Message sound turned on - restarting", 5000);
++            armRebootFallback();
++        }
++        controller->sendConfig(rtttl, ownNode); // the radio plays it once as a preview (firmware patch)
++        uiCfg.ring_tone_id = (uint32_t)idx;
++        uiCfg.alert_enabled = idx > 0;
++        storeUI();
++    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
 +    ui.setCallbacks(cb);
@@ -7262,6 +7368,33 @@ index 0000000..72f91b2
 +        },
 +        15000, this);
 +    lv_timer_set_repeat_count(t, 1);
++}
++
++void HopticsView::updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg)
++{
++    mqttEnabled = cfg.enabled;
++}
++
++void HopticsView::updateExtNotificationModule(const meshtastic_ModuleConfig_ExternalNotificationConfig &cfg)
++{
++    extNotif = cfg;
++    haveExtNotif = true;
++}
++
++void HopticsView::updateRingtone(const char rtttl[231])
++{
++    int found = -1;
++    for (int t = 0; t < HopticsUI::kToneCount && found < 0; t++) {
++        const char *name = HopticsUI::toneLibraryName(t);
++        for (int i = 0; i < numRingtones; i++)
++            if (strcmp(ringtone[i].name, name) == 0 && strncmp(ringtone[i].rtttl, rtttl, 230) == 0) {
++                found = t;
++                break;
++            }
++    }
++    if (found < 0 && strncmp(rtttl, "Silent:", 7) == 0)
++        found = 0;
++    ui.setRingtone(found); // -1 = something else, set from a phone app
 +}
 +
 +void HopticsView::updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg)
