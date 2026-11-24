@@ -352,6 +352,16 @@ int main(int argc, char **argv)
     lv_obj_scroll_to_view_recursive(ui.setMapSw, LV_ANIM_OFF);
     pump(20);
     shot("45_settings_map");
+    ui.setRingtone(3);
+    ui.openSettings();
+    pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setToneDd, LV_ANIM_OFF);
+    pump(20);
+    shot("46_settings_sound");
+    lv_dropdown_open(ui.setToneDd);
+    pump(20);
+    shot("46b_sound_list");
+    lv_dropdown_close(ui.setToneDd);
     ui.openSettings();
     pump(20);
     lv_obj_scroll_to_view_recursive(ui.setBt, LV_ANIM_OFF);
