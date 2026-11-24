@@ -1,0 +1,197 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 2b58bd1..a3e836a 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -880,6 +880,11 @@ void setup()
+     // Initialize transmit history to persist broadcast throttle timers across reboots
+     TransmitHistory::getInstance()->loadFromDisk();
+ #if HAS_TFT
++#if defined(HOPTICS_UI)
++    // Hoptics MT replaces both BaseUI and MUI: always boot the colour UI, even if an old config
++    // saved from stock firmware says DEFAULT (which is what leaves users stuck on BaseUI).
++    config.display.displaymode = meshtastic_Config_DisplayConfig_DisplayMode_COLOR;
++#endif
+     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+         tftSetup();
+     }
+diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
+index 7f9fbc4..6a97eac 100644
+--- a/src/mesh/http/ContentHandler.cpp
++++ b/src/mesh/http/ContentHandler.cpp
+@@ -38,6 +38,20 @@
+ // Includes for the https server
+ //   https://github.com/fhessel/esp32_https_server
+ #include <HTTPRequest.hpp>
++
++#if defined(HOPTICS_UI)
++// Hoptics MT hardening (see README "Security"):
++//  - browsers on other websites may no longer drive the radio API; only the official hosted client may
++//  - reboot / file upload / file delete are HTTPS-only (never on plain HTTP)
++//  - adds a read-only dashboard at /hoptics backed by /json/hoptics (no direct messages, chat opt-in)
++#include "mesh/http/HopticsWebPage.h"
++#define HTTP_CORS_ORIGIN "https://client.meshtastic.org"
++bool hoptics_copy_snapshot(std::string &out);
++static void handleHopticsPage(HTTPRequest *req, HTTPResponse *res);
++static void handleHopticsJson(HTTPRequest *req, HTTPResponse *res);
++#else
++#define HTTP_CORS_ORIGIN "*"
++#endif
+ #include <HTTPResponse.hpp>
+ #include <HTTPSServer.hpp>
+ #include <HTTPServer.hpp>
+@@ -86,6 +100,14 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
+     ResourceNode *nodeJsonFsBrowseStatic = new ResourceNode("/json/fs/browse/static", "GET", &handleFsBrowseStatic);
+     ResourceNode *nodeJsonDelete = new ResourceNode("/json/fs/delete/static", "DELETE", &handleFsDeleteStatic);
+ 
++#if defined(HOPTICS_UI)
++    ResourceNode *nodeHoptics = new ResourceNode("/hoptics", "GET", &handleHopticsPage);
++    ResourceNode *nodeHopticsJson = new ResourceNode("/json/hoptics", "GET", &handleHopticsJson);
++    secureServer->registerNode(nodeHoptics);
++    secureServer->registerNode(nodeHopticsJson);
++    insecureServer->registerNode(nodeHoptics);
++    insecureServer->registerNode(nodeHopticsJson);
++#endif
+     ResourceNode *nodeRoot = new ResourceNode("/*", "GET", &handleStatic);
+ 
+     // Secure nodes
+@@ -108,11 +130,15 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
+     insecureServer->registerNode(nodeAPIv1ToRadio);
+     insecureServer->registerNode(nodeAPIv1FromRadioOptions);
+     insecureServer->registerNode(nodeAPIv1FromRadio);
++#if !defined(HOPTICS_UI)
+     insecureServer->registerNode(nodeRestart);
+     insecureServer->registerNode(nodeFormUpload);
++#endif
+     insecureServer->registerNode(nodeJsonScanNetworks);
+     insecureServer->registerNode(nodeJsonFsBrowseStatic);
++#if !defined(HOPTICS_UI)
+     insecureServer->registerNode(nodeJsonDelete);
++#endif
+     insecureServer->registerNode(nodeJsonReport);
+     insecureServer->registerNode(nodeAdmin);
+     insecureServer->registerNode(nodeRoot); // This has to be last
+@@ -139,7 +165,7 @@ void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res)
+ 
+     // Status code is 200 OK by default.
+     res->setHeader("Content-Type", "application/x-protobuf");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "GET");
+     res->setHeader("X-Protobuf-Schema", "https://raw.githubusercontent.com/meshtastic/protobufs/master/meshtastic/mesh.proto");
+ 
+@@ -189,7 +215,7 @@ void handleAPIv1ToRadio(HTTPRequest *req, HTTPResponse *res)
+ 
+     res->setHeader("Content-Type", "application/x-protobuf");
+     res->setHeader("Access-Control-Allow-Headers", "Content-Type");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "PUT, OPTIONS");
+     res->setHeader("X-Protobuf-Schema", "https://raw.githubusercontent.com/meshtastic/protobufs/master/meshtastic/mesh.proto");
+ 
+@@ -349,7 +375,7 @@ std::string htmlListDir(const char *dirname, uint8_t levels)
+ void handleFsBrowseStatic(HTTPRequest *req, HTTPResponse *res)
+ {
+     res->setHeader("Content-Type", "application/json");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "GET");
+ 
+     std::string fileList;
+@@ -383,7 +409,7 @@ void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
+     std::string paramValDelete;
+ 
+     res->setHeader("Content-Type", "application/json");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "DELETE");
+ 
+     if (params->getQueryParameter("delete", paramValDelete)) {
+@@ -648,7 +674,7 @@ void handleReport(HTTPRequest *req, HTTPResponse *res)
+ 
+     if (content == "json") {
+         res->setHeader("Content-Type", "application/json");
+-        res->setHeader("Access-Control-Allow-Origin", "*");
++        res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+         res->setHeader("Access-Control-Allow-Methods", "GET");
+     } else {
+         res->setHeader("Content-Type", "text/html");
+@@ -780,7 +806,7 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
+ 
+     if (content == "json") {
+         res->setHeader("Content-Type", "application/json");
+-        res->setHeader("Access-Control-Allow-Origin", "*");
++        res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+         res->setHeader("Access-Control-Allow-Methods", "GET");
+     } else {
+         res->setHeader("Content-Type", "text/html");
+@@ -860,7 +886,7 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
+ void handleAdmin(HTTPRequest *req, HTTPResponse *res)
+ {
+     res->setHeader("Content-Type", "text/html");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "GET");
+ 
+     res->println("<h1>Meshtastic</h1>");
+@@ -872,7 +898,7 @@ void handleAdmin(HTTPRequest *req, HTTPResponse *res)
+ void handleRestart(HTTPRequest *req, HTTPResponse *res)
+ {
+     res->setHeader("Content-Type", "text/html");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "GET");
+ 
+     res->println("<h1>Meshtastic</h1>");
+@@ -885,7 +911,7 @@ void handleRestart(HTTPRequest *req, HTTPResponse *res)
+ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+ {
+     res->setHeader("Content-Type", "application/json");
+-    res->setHeader("Access-Control-Allow-Origin", "*");
++    res->setHeader("Access-Control-Allow-Origin", HTTP_CORS_ORIGIN);
+     res->setHeader("Access-Control-Allow-Methods", "GET");
+     // res->setHeader("Content-Type", "text/html");
+ 
+@@ -924,3 +950,43 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+     writeAll(res, out);
+ }
+ #endif
++
++#if defined(HOPTICS_UI)
++static void hopticsSecurityHeaders(HTTPResponse *res)
++{
++    res->setHeader("Cache-Control", "no-store");
++    res->setHeader("X-Content-Type-Options", "nosniff");
++    res->setHeader("X-Frame-Options", "DENY");
++    res->setHeader("Referrer-Policy", "no-referrer");
++}
++
++static void handleHopticsPage(HTTPRequest *req, HTTPResponse *res)
++{
++    if (webServerThread)
++        webServerThread->markActivity();
++    hopticsSecurityHeaders(res);
++    // the page only talks to this node; inline code is ours and renders data with textContent only
++    res->setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
++                                              "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
++                                              "form-action 'none'; frame-ancestors 'none'");
++    res->setHeader("Content-Type", "text/html; charset=utf-8");
++    res->write((const uint8_t *)HOPTICS_WEB_PAGE, strlen(HOPTICS_WEB_PAGE));
++}
++
++static void handleHopticsJson(HTTPRequest *req, HTTPResponse *res)
++{
++    if (webServerThread)
++        webServerThread->markActivity();
++    hopticsSecurityHeaders(res);
++    std::string snap;
++    if (!hoptics_copy_snapshot(snap)) {
++        res->setStatusCode(503);
++        res->setHeader("Content-Type", "application/json");
++        res->print("{\"error\":\"starting\"}");
++        return;
++    }
++    // deliberately no Access-Control-Allow-Origin: other websites cannot read this from your browser
++    res->setHeader("Content-Type", "application/json");
++    res->write((const uint8_t *)snap.data(), snap.size());
++}
++#endif

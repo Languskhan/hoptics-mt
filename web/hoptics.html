@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoptics MT</title>
+<style>
+:root{--bg:#0a0f14;--bar:#0e151c;--card:#131b24;--card2:#1b2531;--line:#243141;--text:#e6edf3;--muted:#8695a5;--dim:#55636f;
+--cyan:#22d3ee;--green:#34d399;--amber:#fbbf24;--red:#f87171;--violet:#a78bfa;--pink:#f472b6;--blue:#60a5fa}
+body.day{--bg:#f2f4f7;--bar:#fff;--card:#fff;--card2:#e3e8ee;--line:#b8c2ce;--text:#05090f;--muted:#2e3a48;--dim:#5a6675;
+--cyan:#0369a1;--green:#047857;--amber:#b45309;--red:#b91c1c;--violet:#6d28d9;--pink:#be185d;--blue:#1d4ed8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--bar);border-bottom:1px solid var(--line)}
+.logo{width:10px;height:10px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
+h1{font-size:16px;letter-spacing:2px;margin:0}
+.sub{color:var(--muted);font-size:12px}
+.grow{flex:1}
+button{background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font:inherit}
+button.on{border-color:var(--cyan);color:var(--cyan)}
+main{display:grid;gap:12px;padding:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));max-width:1500px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}
+.card h2{font-size:11px;letter-spacing:1px;color:var(--muted);margin:0 0 8px;font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tile{background:var(--card2);border-radius:10px;padding:8px 10px;border-left:3px solid var(--c)}
+.tile .k{font-size:10px;color:var(--muted);letter-spacing:1px}
+.tile .v{font-size:28px;font-weight:700;color:var(--c)}
+.tile .s{font-size:11px;color:var(--muted)}
+canvas{width:100%;display:block}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;cursor:pointer;padding:4px}
+td{padding:5px 4px;border-top:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.badge{display:inline-block;min-width:44px;text-align:center;border-radius:6px;padding:1px 4px;font-weight:600;font-size:12px}
+.pill{font-size:10px;border-radius:4px;padding:1px 5px;font-weight:600}
+.scroll{max-height:380px;overflow:auto}
+.mq{border-left:3px solid var(--violet)}
+.msg{padding:6px 8px;border-radius:10px;background:var(--card2);margin:4px 0}
+.msg b{font-size:12px}
+.wide{grid-column:1/-1}
+#status{font-size:12px}
+@media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"></div>
+  <div><h1>HOPTICS MT</h1><div class="sub" id="radio">connecting...</div></div>
+  <div class="grow"></div>
+  <span id="status" class="sub"></span>
+  <button id="themeBtn" title="Toggle day / night">Day</button>
+</header>
+<main>
+  <section class="card wide">
+    <div class="tiles">
+      <div class="tile" style="--c:var(--cyan)"><div class="k">NODES ONLINE</div><div class="v" id="tOnline">-</div><div class="s" id="tOnlineS"></div></div>
+      <div class="tile" style="--c:var(--amber)"><div class="k">CHANNEL UTIL</div><div class="v" id="tCh">-</div><div class="s" id="tChS"></div></div>
+      <div class="tile" style="--c:var(--violet)"><div class="k">AIRTIME TX</div><div class="v" id="tAir">-</div><div class="s">last hour</div></div>
+      <div class="tile" style="--c:var(--green)"><div class="k">PACKETS</div><div class="v" id="tPk">-</div><div class="s" id="tPkS"></div></div>
+    </div>
+  </section>
+  <section class="card"><h2>LIVE MAP - pings show who is talking</h2><canvas id="map" height="360"></canvas><div class="sub" id="mapInfo"></div></section>
+  <section class="card"><h2>LIVE TRAFFIC</h2>
+    <div style="margin-bottom:6px"><button data-f="all" class="on">All</button> <button data-f="rf">RF</button> <button data-f="mqtt">MQTT</button></div>
+    <div class="scroll"><table><tbody id="live"></tbody></table></div></section>
+  <section class="card"><h2>CHANNEL LOAD - % per minute (amber ch util, violet air tx)</h2><canvas id="cUtil" height="120"></canvas>
+    <h2 style="margin-top:10px">PACKETS PER MINUTE</h2><canvas id="cRate" height="90"></canvas></section>
+  <section class="card"><h2>SIGNAL - last packets (cyan RSSI -130..-30 dBm, pink SNR -20..15 dB)</h2><canvas id="cSig" height="120"></canvas>
+    <h2 style="margin-top:10px">TRAFFIC MIX</h2><div id="mix"></div></section>
+  <section class="card wide"><h2>NODES - click a column to sort</h2><div class="scroll"><table>
+    <thead><tr><th data-k="short">NODE</th><th data-k="long">NAME</th><th data-k="role">ROLE</th><th data-k="hops">HOPS</th><th data-k="snr">SNR</th><th data-k="batt">BATT</th><th data-k="pk">PKTS</th><th data-k="last">HEARD</th></tr></thead>
+    <tbody id="nodes"></tbody></table></div></section>
+  <section class="card wide" id="chatCard" hidden><h2>CHANNEL CHAT (shared by the node owner; direct messages are never shown)</h2><div id="chat" class="scroll"></div></section>
+</main>
+<script>
+"use strict";
+// Hoptics MT web dashboard. Read-only: polls /json/hoptics on this node. All data is rendered with
+// textContent / canvas, never innerHTML, so names and messages cannot inject markup or script.
+const $ = id => document.getElementById(id);
+let data = null, filter = "all", sortKey = "last", sortDir = -1, seen = new Set(), pings = [];
+function el(tag, text, cls){const e=document.createElement(tag); if(text!==undefined&&text!==null) e.textContent=String(text); if(cls) e.className=cls; return e;}
+function css(v){return getComputedStyle(document.body).getPropertyValue(v).trim();}
+// same colour formula as the device (HopticsUI::nodeColor) so a node looks the same on screen and on the web
+function hsv(h,s,v){ s/=100; v/=100; const f=n=>{const k=(n+h/60)%6; return Math.round(255*(v-v*s*Math.max(0,Math.min(k,4-k,1))));}; return "rgb("+f(5)+","+f(3)+","+f(1)+")"; }
+function nodeColor(id){ const num=parseInt(String(id).replace("!",""),16)>>>0; const h=Math.imul(num,2654435761)>>>0;
+  return document.body.classList.contains("day")? hsv((h>>>8)%360,75,62) : hsv((h>>>8)%360,55,85); }
+function lum(c){ const m=c.match(/\d+/g).map(Number); return 0.299*m[0]+0.587*m[1]+0.114*m[2]; }
+function ago(t){ if(!data||!t) return "-"; const d=data.now-t; if(d<0) return "-"; if(d<60) return d+"s"; if(d<3600) return Math.floor(d/60)+"m"; if(d<86400) return Math.floor(d/3600)+"h"; return Math.floor(d/86400)+"d"; }
+const portCol = {TEXT:"--cyan",POS:"--green",INFO:"--violet",TELEM:"--amber",ACK:"--dim",TRACE:"--pink",NBR:"--pink",MAP:"--green",WAYPT:"--green"};
+function badge(id){ const n=byId(id); const b=el("span", n?n.short:id.slice(-4), "badge"); const c=nodeColor(id); b.style.background=c; b.style.color=lum(c)>140?"#05090f":"#fff"; return b; }
+function byId(id){ return data && data.nodes.find(n=>n.id===id); }
+
+// theme (remember choice in this browser only)
+try{ if(localStorage.getItem("hopticsDay")==="1") document.body.classList.add("day"); }catch(e){}
+if(/[?&]day\b/.test(location.search)) document.body.classList.add("day");  // bookmarkable: /hoptics?day
+$("themeBtn").textContent=document.body.classList.contains("day")?"Night":"Day";
+$("themeBtn").onclick=()=>{ document.body.classList.toggle("day"); $("themeBtn").textContent=document.body.classList.contains("day")?"Night":"Day"; try{localStorage.setItem("hopticsDay",document.body.classList.contains("day")?"1":"0");}catch(e){} render(); };
+document.querySelectorAll("button[data-f]").forEach(b=>b.onclick=()=>{filter=b.dataset.f; document.querySelectorAll("button[data-f]").forEach(x=>x.classList.toggle("on",x===b)); renderLive();});
+document.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{ if(sortKey===th.dataset.k) sortDir=-sortDir; else {sortKey=th.dataset.k; sortDir=(sortKey==="short"||sortKey==="long"||sortKey==="role"||sortKey==="hops")?1:-1;} renderNodes(); });
+
+function fit(c){ const r=c.getBoundingClientRect(), dpr=window.devicePixelRatio||1; const h=+c.getAttribute("height"); c.width=r.width*dpr; c.height=h*dpr; c.style.height=h+"px"; const g=c.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0); return [g,r.width,h]; }
+function line(c, series, lo, hi, bars){
+  const [g,w,h]=fit(c); g.clearRect(0,0,w,h); g.strokeStyle=css("--line"); g.lineWidth=1;
+  for(let i=1;i<4;i++){ g.beginPath(); g.moveTo(0,h*i/4); g.lineTo(w,h*i/4); g.stroke(); }
+  series.forEach(([arr,col])=>{ const n=arr.length; if(!n) return; g.strokeStyle=g.fillStyle=css(col); g.lineWidth=2;
+    if(bars){ const bw=w/n; arr.forEach((v,i)=>{ if(v===null) return; const y=h-(v-lo)/(hi-lo)*h; g.fillRect(i*bw+1,y,Math.max(1,bw-2),h-y); }); return; }
+    g.beginPath(); let pen=false; arr.forEach((v,i)=>{ if(v===null){pen=false;return;} const x=i*w/(n-1), y=h-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo)*h; if(pen) g.lineTo(x,y); else {g.moveTo(x,y); pen=true;} }); g.stroke(); });
+}
+
+function render(){ if(!data) return; renderTiles(); renderLive(); renderNodes(); renderCharts(); renderChat(); drawMap(); }
+function renderTiles(){
+  const s=data.stats, r=data.radio, others=data.nodes.filter(n=>!n.me);
+  const online=others.filter(n=>n.last&&data.now-n.last<=7200).length;
+  $("tOnline").textContent=online; $("tOnlineS").textContent="of "+others.length;
+  $("tCh").textContent= s.chutil>=0? Math.round(s.chutil)+"%":"-"; $("tChS").textContent= s.chutil<25?"quiet":s.chutil<50?"busy":"congested";
+  $("tAir").textContent= s.airtx>=0? s.airtx.toFixed(1)+"%":"-";
+  $("tPk").textContent=s.pkts; $("tPkS").textContent="direct "+s.direct+" - MQTT "+s.mqtt;
+  const me=data.nodes.find(n=>n.me);
+  $("radio").textContent=(me?me.long+" ("+me.short+")  -  ":"")+r.region+"  -  "+r.preset+(r.mhz?"  -  "+r.mhz.toFixed(3)+" MHz":"")+"  -  "+data.fw;
+  $("status").textContent=(s.mqttUp?"MQTT up  -  ":"")+(s.battery!==null?"battery "+s.battery+"%  -  ":"")+"updated "+new Date().toLocaleTimeString();
+}
+function renderLive(){
+  const tb=$("live"); tb.replaceChildren();
+  data.live.filter(l=>filter==="all"||(filter==="mqtt")===l.mqtt).forEach(l=>{
+    const tr=el("tr"); if(l.mqtt) tr.className="mq"; const n=byId(l.from);
+    const td1=el("td"); td1.append(badge(l.from)); tr.append(td1, el("td", n?n.long:l.from));
+    const p=el("span", l.port, "pill"); const c=css(portCol[l.port]||"--blue"); p.style.color=c; p.style.border="1px solid "+c;
+    const td3=el("td"); td3.append(p); tr.append(td3);
+    tr.append(el("td", l.mqtt?"via MQTT":(l.hops===0?"direct":(l.hops===null?"?":l.hops+" hop"+(l.hops==1?"":"s")))+" - "+l.to));
+    tr.append(el("td", l.rssi!==null? l.rssi+" dBm / "+(l.snr>0?"+":"")+l.snr.toFixed(1)+" dB":"-"), el("td", ago(l.t)));
+    tb.append(tr); });
+}
+function renderNodes(){
+  const tb=$("nodes"); tb.replaceChildren();
+  const list=data.nodes.filter(n=>!n.me).slice().sort((a,b)=>{ let x=a[sortKey], y=b[sortKey]; if(x===null||x===undefined) return 1; if(y===null||y===undefined) return -1; return (x>y?1:x<y?-1:0)*sortDir; });
+  list.forEach(n=>{ const tr=el("tr"); const td=el("td"); td.append(badge(n.id)); tr.append(td, el("td",n.long||n.id), el("td",n.role),
+    el("td", n.mqtt?"MQTT":n.hops===null?"-":n.hops===0?"direct":n.hops), el("td", n.snr===null?"-":(n.snr>0?"+":"")+n.snr.toFixed(1)),
+    el("td", n.batt===null?"-":n.batt>100?"USB":n.batt+"%"), el("td",n.pk), el("td",ago(n.last)));
+    if(!(n.last&&data.now-n.last<=7200)) tr.style.opacity=.5; tb.append(tr); });
+}
+function renderCharts(){
+  const s=data.stats;
+  line($("cUtil"), [[s.chHist,"--amber"],[s.airHist,"--violet"]], 0, Math.max(20, ...s.chHist.filter(v=>v!==null))*1.1);
+  line($("cRate"), [[s.rateHist,"--green"]], 0, Math.max(5, ...s.rateHist.filter(v=>v!==null)), true);
+  const rs=s.rssiHist, sn=s.snrHist; line($("cSig"), [[rs,"--cyan"]], -130, -30); const c=$("cSig"), g=c.getContext("2d"), w=c.getBoundingClientRect().width, h=120;
+  g.strokeStyle=css("--pink"); g.lineWidth=2; g.beginPath(); let pen=false; sn.forEach((v,i)=>{ if(v===null){pen=false;return;} const x=i*w/(sn.length-1), y=h-(Math.max(-20,Math.min(15,v))+20)/35*h; if(pen) g.lineTo(x,y); else {g.moveTo(x,y); pen=true;} }); g.stroke();
+  const mix=$("mix"); mix.replaceChildren(); const p=s.ports; const tot=Object.entries(p).filter(([k])=>k!=="mqtt").reduce((a,[,v])=>a+v,0)||1;
+  [["text","--cyan"],["position","--green"],["nodeinfo","--violet"],["telemetry","--amber"],["routing","--dim"],["trace","--pink"],["other","--blue"],["mqtt","--violet"]].forEach(([k,col])=>{
+    const row=el("div"); row.style.cssText="display:flex;gap:8px;align-items:center;font-size:12px;margin:2px 0";
+    const name=el("span",k); name.style.width="80px"; const bar=el("div"); bar.style.cssText="flex:1;height:8px;border-radius:4px;background:"+css("--card2");
+    const fill=el("div"); fill.style.cssText="height:100%;border-radius:4px;background:"+css(col)+";width:"+Math.min(100,p[k]*100/tot)+"%"; bar.append(fill);
+    row.append(name,bar,el("span",p[k])); mix.append(row); });
+}
+function renderChat(){
+  const card=$("chatCard"); if(!data.chat){ card.hidden=true; return; } card.hidden=false; const box=$("chat"); box.replaceChildren();
+  data.chat.slice().sort((a,b)=>a.t-b.t).forEach(m=>{ const n=byId(m.from); const d=el("div",null,"msg"); const who=el("b",(n?n.long:m.from)+"  #"+m.ch+"  "+ago(m.t)); who.style.color=nodeColor(m.from); d.append(who, el("div", m.text)); box.append(d); });
+  box.scrollTop=box.scrollHeight;
+}
+
+// radar map: same projection as the device - centred on us, range rings, direct links coloured by SNR
+function drawMap(){
+  const c=$("map"); const [g,w,h]=fit(c); g.clearRect(0,0,w,h);
+  const pos=data.nodes.filter(n=>n.lat!==undefined); const me=pos.find(n=>n.me);
+  if(!pos.length){ g.fillStyle=css("--muted"); g.fillText("No positions yet - nodes appear once they share GPS.",12,24); $("mapInfo").textContent=""; return; }
+  const clat= me?me.lat: pos.reduce((a,n)=>a+n.lat,0)/pos.length, clon= me?me.lon: pos.reduce((a,n)=>a+n.lon,0)/pos.length;
+  const kx=111.32*Math.cos(clat*Math.PI/180), ky=110.574;
+  let maxKm=.5; pos.forEach(n=>{ if(n.me) return; if(data.clock && (!n.last||data.now-n.last>86400)) return; const d=Math.hypot((n.lon-clon)*kx,(n.lat-clat)*ky); if(d<400) maxKm=Math.max(maxKm,d); });
+  const R=Math.min(w,h)/2-16, kmpp=maxKm*1.08/R, P=n=>[w/2+(n.lon-clon)*kx/kmpp, h/2-(n.lat-clat)*ky/kmpp];
+  const steps=[.1,.2,.5,1,2,5,10,20,50,100,200,500]; const st=steps.find(s=>s>=maxKm/3)||1000;
+  g.strokeStyle=css("--line"); g.fillStyle=css("--dim"); g.font="11px system-ui";
+  for(let i=1;i<=3;i++){ const r=st*i/kmpp; g.beginPath(); g.arc(w/2,h/2,r,0,7); g.stroke(); g.fillText((st*i<1?st*i*1000+" m":st*i+" km"),w/2+4,h/2-r+12); }
+  const mp=me?P(me):null;
+  pos.forEach(n=>{ if(n.me||!mp||n.hops!==0||n.snr===null||n.mqtt) return; const p=P(n); g.strokeStyle=css(n.snr>=5?"--green":n.snr>=-5?"--amber":"--red"); g.globalAlpha=.6; g.lineWidth=2; g.beginPath(); g.moveTo(...mp); g.lineTo(...p); g.stroke(); g.globalAlpha=1; });
+  pos.forEach(n=>{ if(n.me) return; const [x,y]=P(n); const on=n.last&&data.now-n.last<=7200; g.globalAlpha=on?1:.4; g.fillStyle=nodeColor(n.id); g.beginPath(); g.arc(x,y,5,0,7); g.fill(); g.fillStyle=css("--muted"); g.fillText(n.short,x+8,y+4); g.globalAlpha=1; });
+  if(mp){ g.fillStyle=css("--cyan"); g.shadowColor=g.fillStyle; g.shadowBlur=12; g.beginPath(); g.arc(...mp,7,0,7); g.fill(); g.shadowBlur=0; }
+  const now=performance.now(); pings=pings.filter(p=>now-p.t0<1400);
+  pings.forEach(p=>{ const n=byId(p.id); if(!n||n.lat===undefined) return; const [x,y]=P(n); const k=(now-p.t0)/1400; g.strokeStyle=css(p.mqtt?"--violet":(portCol[p.port]||"--blue")); g.globalAlpha=1-k; g.lineWidth=2; g.beginPath(); g.arc(x,y,4+k*30,0,7); g.stroke();
+    if(mp&&p.hops===0&&!p.mqtt){ g.beginPath(); g.moveTo(x,y); g.lineTo(...mp); g.stroke(); } g.globalAlpha=1; });
+  $("mapInfo").textContent=(me?"":"no GPS fix on this node - centred on the mesh  -  ")+pos.filter(n=>!n.me).length+" nodes with GPS";
+  if(pings.length) requestAnimationFrame(drawMap);
+}
+
+async function poll(){
+  try{
+    const r=await fetch("/json/hoptics",{cache:"no-store"}); if(!r.ok) throw new Error(r.status);
+    const d=await r.json(); const first=!data; data=d;
+    d.live.forEach(l=>{ const k=l.from+l.t+l.port; if(!seen.has(k)){ seen.add(k); if(!first) pings.push({id:l.from,port:l.port,mqtt:l.mqtt,hops:l.hops,t0:performance.now()}); } });
+    if(seen.size>500) seen=new Set([...seen].slice(-200));
+    render();
+  }catch(e){ $("status").textContent="node not reachable ("+e.message+") - retrying"; }
+  setTimeout(poll, 3000);
+}
+window.addEventListener("resize", render);
+poll();
+</script>
+</body>
+</html>
