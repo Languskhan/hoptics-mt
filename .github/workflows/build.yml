@@ -133,11 +133,19 @@ jobs:
           python tools/make_manifest.py "$OUT" "${{ matrix.board }}" "$VER" "$OTA_OFFSET"
           (cd "$OUT" && sha256sum *.bin > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -la "$OUT"
+          # symbols, so a crash backtrace from the serial log can be decoded (separate artifact)
+          mkdir -p elf && cp fw/.pio/build/${{ matrix.env }}/firmware.elf "elf/hoptics-mt-${{ matrix.board }}-mt$VER.elf"
 
       - uses: actions/upload-artifact@v4
         with:
           name: hoptics-mt-${{ matrix.board }}${{ (inputs.channel && inputs.channel != 'tested') && format('-{0}', inputs.channel) || '' }}
           path: out/*/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hoptics-mt-${{ matrix.board }}${{ (inputs.channel && inputs.channel != 'tested') && format('-{0}', inputs.channel) || '' }}-symbols
+          path: elf/*.elf
+          retention-days: 30
 
       - name: Attach to release
         if: github.event_name == 'release'
