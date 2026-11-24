@@ -1,0 +1,165 @@
+name: Build Hoptics MT firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      firmware_ref:
+        description: "Meshtastic firmware tag or SHA (blank = the tested pin)"
+        required: false
+        default: ""
+      channel:
+        description: "Label for the artifacts (tested / stable / beta)"
+        required: false
+        default: "tested"
+  workflow_call:
+    inputs:
+      firmware_ref:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+
+permissions:
+  contents: write # attach binaries to releases
+
+env:
+  # The tested upstream pin. Weekly "upstream" runs pass newer stable/beta tags instead.
+  FIRMWARE_REF: ${{ inputs.firmware_ref || 'e42ae674501cb3c90ef52e91ea74a436c69fc6b8' }} # meshtastic/firmware 2.8.3 (2026-11-23)
+  CHANNEL: ${{ inputs.channel || 'tested' }}
+
+jobs:
+  build:
+    name: ${{ matrix.board }} (${{ inputs.channel || 'tested' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: heltec-v4-expansion-kit # original V4 + 2.8" touch kit (2 MB PSRAM)
+            env: heltec-v4-tft
+            flags: ""
+          - board: heltec-v4-r8-expansion-kit-v2 # V4-R8 + Expansion Kit V2 (8 MB PSRAM)
+            env: heltec-v4-r8-tft
+            flags: "-DHOPTICS_HISTORY=120 -DHOPTICS_SIGNAL_HISTORY=120 -DHOPTICS_NODE_ROWS=80 -DHOPTICS_MAX_NODES=500"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch pinned Meshtastic firmware
+        run: |
+          git init -q fw && cd fw
+          git remote add origin https://github.com/meshtastic/firmware.git
+          git fetch -q --depth 1 origin "$FIRMWARE_REF"
+          git checkout -q FETCH_HEAD
+          git submodule update --init --depth 1
+          # device-ui version is whatever this firmware pins - no second pin to keep in sync
+          DUI=$(grep -oE 'meshtastic/device-ui/archive/[0-9a-f]{40}\.zip' platformio.ini | head -1 | grep -oE '[0-9a-f]{40}')
+          echo "DEVICE_UI_SHA=$DUI" >> "$GITHUB_ENV"
+          echo "firmware $FIRMWARE_REF  device-ui $DUI"
+
+      - name: Fetch pinned device-ui
+        run: |
+          git init -q device-ui && cd device-ui
+          git remote add origin https://github.com/meshtastic/device-ui.git
+          git fetch -q --depth 1 origin "$DEVICE_UI_SHA"
+          git checkout -q FETCH_HEAD
+
+      - name: Apply Hoptics MT
+        run: |
+          git -C device-ui apply --whitespace=nowarn "$GITHUB_WORKSPACE/patches/device-ui.patch"
+          git -C fw apply --whitespace=nowarn "$GITHUB_WORKSPACE/patches/firmware.patch"
+          python tools/embed_web.py web/hoptics.html fw/src/mesh/http/HopticsWebPage.h
+          # offline city locator: GeoNames towns >= 5000 people (CC BY 4.0). Build still works without it.
+          if curl -fsSL --retry 3 -o cities5000.zip https://download.geonames.org/export/dump/cities5000.zip; then
+            python tools/build_cities.py cities5000.zip device-ui/include/graphics/view/TFT/HopticsCities.h
+          else
+            echo "::warning::GeoNames download failed - building without the city locator"
+          fi
+          # build against our patched device-ui instead of the upstream zip
+          sed -i -E "s#https://github.com/meshtastic/device-ui/archive/[0-9a-f]+\.zip#symlink://$GITHUB_WORKSPACE/device-ui#" fw/platformio.ini
+          grep -n "symlink://" fw/platformio.ini
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ matrix.env }}-${{ env.FIRMWARE_REF }}
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Build
+        working-directory: fw
+        env:
+          PLATFORMIO_BUILD_FLAGS: -DHOPTICS_UI ${{ matrix.flags }}
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Collect binaries
+        run: |
+          VER=$(grep -E '^(major|minor|build)' fw/version.properties | awk -F= '{gsub(/ /,"",$2); printf "%s.", $2}' | sed 's/\.$//')
+          echo "MT_VER=$VER" >> "$GITHUB_ENV"
+          OUT=out/hoptics-mt-${{ matrix.board }}
+          [ "$CHANNEL" != "tested" ] && OUT=out/hoptics-mt-${{ matrix.board }}-$CHANNEL
+          mkdir -p "$OUT"
+          for f in fw/.pio/build/${{ matrix.env }}/*.bin; do
+            b=$(basename "$f")
+            case "$b" in
+              *factory*) cp "$f" "$OUT/hoptics-mt-${{ matrix.board }}-mt$VER.factory.bin" ;;
+              firmware*.bin) cp "$f" "$OUT/hoptics-mt-${{ matrix.board }}-mt$VER.update.bin" ;;
+            esac
+          done
+          # Wi-Fi/BLE OTA loader for the ota_1 slot - the same file Meshtastic's own CI ships
+          curl -fsSL -o "$OUT/mt-esp32s3-ota.bin" https://github.com/meshtastic/esp32-unified-ota/releases/latest/download/mt-esp32s3-ota.bin
+          OTA_OFFSET=$(awk -F, '$1 ~ /app1/ {gsub(/ /,"",$4); print $4}' fw/default_16MB.csv)
+          echo "ota_1 offset: $OTA_OFFSET"
+          python tools/make_manifest.py "$OUT" "${{ matrix.board }}" "$VER" "$OTA_OFFSET"
+          (cd "$OUT" && sha256sum *.bin > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hoptics-mt-${{ matrix.board }}${{ (inputs.channel && inputs.channel != 'tested') && format('-{0}', inputs.channel) || '' }}
+          path: out/*/*
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out/hoptics-mt-${{ matrix.board }}
+          for f in *.bin; do gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber -R "${{ github.repository }}"; done
+          mv SHA256SUMS.txt SHA256SUMS-${{ matrix.board }}.txt
+          gh release upload "${{ github.event.release.tag_name }}" SHA256SUMS-${{ matrix.board }}.txt --clobber -R "${{ github.repository }}"
+
+  installer:
+    # one-click browser installer on GitHub Pages (needs the repo to be public, or a paid plan)
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: site/firmware
+      - run: |
+          cp -r docs/screenshots site/ 2>/dev/null || true
+          find site -maxdepth 3 | sort
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
