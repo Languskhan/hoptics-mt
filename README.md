@@ -58,15 +58,16 @@ InfluxDB or a spreadsheet. See [Discord / logging](#discord--logging).
 
 ## Install (easiest)
 
-Download the zip from the latest [release](https://github.com/Languskhan/hoptics-mt/releases), unzip it
-and open **START HERE - install and test guide.html**. It walks through flashing from Chrome or Edge in
-about 10 minutes:
+From the latest [release](https://github.com/Languskhan/hoptics-mt/releases), download
+**START-HERE-Hoptics-MT-install-guide.html** and the files for your kit (the guide's table says which).
+It walks through flashing from Chrome or Edge in about 10 minutes:
 - **Already on regular Meshtastic (2.6+)**: the Meshtastic Web Flasher can install the `.update.bin`
   (folder icon next to Select Firmware, then **Update**). Your settings are kept.
 - **Anything else**: Espressif's ESP Tool page, `.factory.bin` at `0x0` plus `mt-esp32s3-ota.bin` at
   `0x650000`.
 
-The setup wizard takes over on the screen after that.
+The setup wizard takes over on the screen after that. The release also has a PDF user guide with
+screenshots of every screen.
 
 ## Flashing by hand
 
