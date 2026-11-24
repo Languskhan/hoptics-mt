@@ -134,7 +134,10 @@ jobs:
           (cd "$OUT" && sha256sum *.bin > SHA256SUMS.txt && cat SHA256SUMS.txt)
           ls -la "$OUT"
           # symbols, so a crash backtrace from the serial log can be decoded (separate artifact)
-          mkdir -p elf && cp fw/.pio/build/${{ matrix.env }}/firmware.elf "elf/hoptics-mt-${{ matrix.board }}-mt$VER.elf"
+          # (Meshtastic names it firmware-<env>-<version>.elf; never let this fail the build)
+          mkdir -p elf
+          for e in fw/.pio/build/${{ matrix.env }}/*.elf; do [ -f "$e" ] && cp "$e" "elf/hoptics-mt-${{ matrix.board }}-mt$VER.elf"; done
+          ls -la elf || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -146,6 +149,7 @@ jobs:
           name: hoptics-mt-${{ matrix.board }}${{ (inputs.channel && inputs.channel != 'tested') && format('-{0}', inputs.channel) || '' }}-symbols
           path: elf/*.elf
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Attach to release
         if: github.event_name == 'release'
