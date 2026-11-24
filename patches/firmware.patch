@@ -97,6 +97,26 @@ index 6e96d20..b8afe81 100644
  
      /// Allows the bluetooth handler to free packets after they have been sent
      void releaseToPool(meshtastic_MeshPacket *p) { packetPool.release(p); }
+diff --git a/src/mesh/NextHopRouter.cpp b/src/mesh/NextHopRouter.cpp
+index 2c5ee8d..4e85c23 100644
+--- a/src/mesh/NextHopRouter.cpp
++++ b/src/mesh/NextHopRouter.cpp
+@@ -242,6 +242,15 @@ void NextHopRouter::sniffReceived(const meshtastic_MeshPacket *p, const meshtast
+ /* Check if we should be rebroadcasting this packet if so, do so. */
+ bool NextHopRouter::perhapsRebroadcast(const meshtastic_MeshPacket *p)
+ {
++#if defined(HOPTICS_UI)
++    // Hoptics MT: traffic pulled in from an MQTT broker (channel downlink) is shown on this node's screen and
++    // in its app, but never relayed over LoRa - the zero-hop rule the public Meshtastic broker applies, here
++    // for every broker. Watching a regional feed (e.g. msh/US/bayarea) can't put that traffic on local air.
++    if (p->transport_mechanism == meshtastic_MeshPacket_TransportMechanism_TRANSPORT_MQTT) {
++        LOG_DEBUG("Hoptics: no LoRa relay for MQTT downlink from 0x%08x", p->from);
++        return false;
++    }
++#endif
+ #if USERPREFS_BLOCK_POSITION_ON_EVENT_CHANNEL
+     // Never relay coordinate-bearing packets on the event ("everyone") channel.
+     // Closes the reliable-retransmit-dupe path that runs before handleReceived().
 diff --git a/src/mesh/PhoneAPI.cpp b/src/mesh/PhoneAPI.cpp
 index ea9c195..2521415 100644
 --- a/src/mesh/PhoneAPI.cpp

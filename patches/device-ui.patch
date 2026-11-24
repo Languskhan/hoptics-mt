@@ -592,10 +592,10 @@ index 71cbee1..a0f7440 100644
  #define LV_USE_CHECKBOX 1
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..3e980ca
+index 0000000..1ee2c43
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,4024 @@
+@@ -0,0 +1,4074 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -608,6 +608,13 @@ index 0000000..3e980ca
 +#include <ctime>
 +#include <initializer_list>
 +
++#if defined(ARDUINO_ARCH_ESP32)
++#include "nvs.h"
++#endif
++#if __has_include("graphics/view/TFT/HopticsBootBg.h")
++#include "graphics/view/TFT/HopticsBootBg.h" // generated at build time from assets/boot_bg.png by tools/png_to_lvgl.py
++#define HOPTICS_HAS_BOOT_BG 1
++#endif
 +#if __has_include("graphics/view/TFT/HopticsCities.h")
 +#include "graphics/view/TFT/HopticsCities.h" // generated at build time from GeoNames by tools/build_cities.py
 +#define HOPTICS_HAVE_CITIES 1
@@ -1389,6 +1396,30 @@ index 0000000..3e980ca
 +}
 +
 +// ================================================================= boot
++#ifdef HOPTICS_HAS_BOOT_BG
++// Which background to show this boot: 0, 1, 2, 0, ... kept in NVS so it rotates across power cycles too
++// (one tiny write per boot - NVS wear-levels it).
++static int nextBootBackground(int count)
++{
++    if (count <= 1)
++        return 0;
++#if defined(ARDUINO_ARCH_ESP32)
++    uint8_t idx = 0;
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READWRITE, &h) == ESP_OK) {
++        nvs_get_u8(h, "bootbg", &idx); // stays 0 when not stored yet
++        nvs_set_u8(h, "bootbg", (uint8_t)((idx + 1) % count));
++        nvs_commit(h);
++        nvs_close(h);
++    }
++    return idx % count;
++#else
++    static int n = 0;
++    return n++ % count;
++#endif
++}
++#endif
++
 +void HopticsUI::createBootScreen(const char *firmwareVersion)
 +{
 +    initFonts();
@@ -1399,6 +1430,25 @@ index 0000000..3e980ca
 +    lv_obj_set_style_bg_color(bootScreen, C_BG, 0);
 +    lv_obj_set_style_bg_grad_color(bootScreen, C_CARD2, 0);
 +    lv_obj_set_style_bg_grad_dir(bootScreen, LV_GRAD_DIR_VER, 0);
++#ifdef HOPTICS_HAS_BOOT_BG
++    // background art (flash-resident RGB565, drawn straight from flash), a different one each boot;
++    // only when it matches the panel exactly
++    if (W() == HOPTICS_BOOT_BG_W && H() == HOPTICS_BOOT_BG_H) {
++        static lv_image_dsc_t bootBg;
++        bootBg.header.magic = LV_IMAGE_HEADER_MAGIC;
++        bootBg.header.cf = LV_COLOR_FORMAT_RGB565;
++        bootBg.header.flags = 0;
++        bootBg.header.w = HOPTICS_BOOT_BG_W;
++        bootBg.header.h = HOPTICS_BOOT_BG_H;
++        bootBg.header.stride = HOPTICS_BOOT_BG_W * 2;
++        bootBg.data_size = HOPTICS_BOOT_BG_W * HOPTICS_BOOT_BG_H * 2;
++        bootBg.data = hoptics_boot_bgs[nextBootBackground(HOPTICS_BOOT_BG_COUNT)];
++        lv_obj_t *bg = lv_image_create(bootScreen);
++        lv_image_set_src(bg, &bootBg);
++        lv_obj_set_pos(bg, 0, 0);
++        lv_obj_remove_flag(bg, LV_OBJ_FLAG_CLICKABLE);
++    }
++#endif
 +
 +    // logo: a node with three expanding radio arcs
 +    const int32_t cx = W() / 2, cy = H() / 2 - 40;
