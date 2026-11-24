@@ -1,8 +1,8 @@
 diff --git a/src/Power.cpp b/src/Power.cpp
-index 17961ad..3f2775c 100644
+index 17961ad..7bff63e 100644
 --- a/src/Power.cpp
 +++ b/src/Power.cpp
-@@ -371,6 +371,52 @@ static void battery_adcDisable()
+@@ -371,6 +371,78 @@ static void battery_adcDisable()
   * A simple battery level sensor that assumes the battery voltage is attached
   * via a voltage-divider to an analog input
   */
@@ -13,41 +13,67 @@ index 17961ad..3f2775c 100644
 +#include "HWCDC.h"
 +// Hoptics MT: the V4 boards have no USB-sense pin, so stock firmware says "on USB" whenever the battery
 +// reads above full-charge voltage - which a freshly charged cell (or an ADC reading a little high) keeps
-+// doing long after the cable is pulled. Instead: a computer on the USB port is seen directly, and its
-+// cable being pulled ends "external power" at once; otherwise the voltage trend decides - on a charger it
-+// holds or climbs, on battery it sags under load.
++// doing long after the cable is pulled. Instead: a computer on the USB port is seen directly (start-of-frame
++// packets), and its cable being pulled ends "external power" at once. Without a computer only a clear,
++// lasting voltage change counts. Transmitting (LoRa, Wi-Fi) only ever pulls single readings *down*, so the
++// level used is the second-highest of the last 7 readings (one per >= 4 s): it must rise 120 mV above its
++// lowest point for three readings in a row to call it a charger, and fall 60 mV below its highest point to
++// call the charger gone.
++// A wall charger on an already-full battery may therefore show as battery 100% - the safe way round.
 +static bool hopticsExternalPower(float mv, float fullMv)
 +{
-+    static bool started = false, ext = false, hostSeen = false;
-+    static float peak = 0, trough = 0;
++    (void)fullMv;
++    static bool ext = false, host = false;
++    static float ring[7];
++    static uint8_t count = 0, head = 0, rises = 0;
++    static uint32_t lastPush = 0;
++    static float lowBase = 0, highBase = 0;
 +    if (mv <= 0)
 +        return ext;
-+    const bool host = HWCDC::isPlugged();
-+    if (host) {
-+        hostSeen = true;
++    if (HWCDC::isPlugged()) {
++        host = true;
 +        ext = true;
-+        peak = trough = mv;
-+    } else if (!started) {
-+        ext = mv > fullMv; // first reading: the old rule
-+        peak = trough = mv;
-+    } else if (hostSeen) {
-+        hostSeen = false; // the computer went away
++        count = 0;
++        return true;
++    }
++    if (host) { // the computer went away: on battery from here
++        host = false;
 +        ext = false;
-+        peak = trough = mv;
-+    } else if (ext) {
-+        peak = std::max(peak, mv);
-+        if (mv < peak - 40) { // fell 40 mV from where the charger held it: unplugged
-+            ext = false;
-+            trough = mv;
-+        }
-+    } else {
-+        trough = std::min(trough, mv);
-+        if (mv > trough + 60) { // rose 60 mV: a charger is filling it
-+            ext = true;
-+            peak = mv;
++        count = head = rises = 0;
++        lowBase = highBase = 0;
++    }
++    const uint32_t now = millis();
++    if (count == 0 || now - lastPush >= 4000) {
++        lastPush = now;
++        ring[head] = mv;
++        head = (uint8_t)((head + 1) % 7);
++        if (count < 7)
++            count++;
++        if (count >= 3) {
++            float s[7];
++            for (uint8_t i = 0; i < count; i++)
++                s[i] = ring[i];
++            std::sort(s, s + count);
++            const float base = s[count - 2]; // second-highest: dips are ignored, one odd spike too
++            if (!ext) {
++                if (lowBase == 0 || base < lowBase)
++                    lowBase = base;
++                rises = (base >= lowBase + 120) ? (uint8_t)(rises + 1) : 0;
++                if (rises >= 3) { // held well above where it was: a charger is filling it
++                    ext = true;
++                    highBase = base;
++                    rises = 0;
++                }
++            } else {
++                if (base > highBase)
++                    highBase = base;
++                if (base < highBase - 60) { // sagging from where the charger held it: unplugged
++                    ext = false;
++                    lowBase = base;
++                }
++            }
 +        }
 +    }
-+    started = true;
 +    return ext;
 +}
 +#endif
@@ -55,7 +81,7 @@ index 17961ad..3f2775c 100644
  class AnalogBatteryLevel : public HasBatteryLevel
  {
    public:
-@@ -605,6 +651,9 @@ class AnalogBatteryLevel : public HasBatteryLevel
+@@ -605,6 +677,9 @@ class AnalogBatteryLevel : public HasBatteryLevel
          // sends no SOF and reads as unplugged. Boards that must spot dumb chargers need a real
          // EXT_PWR_DETECT pin.
          return HWCDC::isPlugged();
