@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoptics MT - one-click installer</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+body{margin:0;background:#0a0f14;color:#e6edf3;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:860px;margin:auto;padding:24px}
+h1{letter-spacing:3px;margin:8px 0 0}
+.tag{color:#8695a5;margin:0 0 24px}
+.card{background:#131b24;border:1px solid #243141;border-radius:14px;padding:18px;margin:14px 0}
+.card h2{margin:0 0 4px;font-size:18px}
+.muted{color:#8695a5;font-size:14px}
+ol li{margin:6px 0}
+esp-web-install-button button{background:#22d3ee;color:#0a0f14;border:0;border-radius:10px;padding:12px 22px;font-weight:700;font-size:16px;cursor:pointer}
+code{background:#1b2531;padding:1px 6px;border-radius:5px}
+img{max-width:100%;border-radius:10px;margin-top:10px}
+a{color:#22d3ee}
+.warn{border-color:#fbbf24}
+</style>
+</head>
+<body>
+<main>
+<h1>HOPTICS MT</h1>
+<p class="tag">A new touch UI for Meshtastic on the Heltec 2.8" touch kits. Install from your browser in about a minute.</p>
+
+<div class="card">
+<h2>Before you start</h2>
+<ol>
+<li>Use <b>Chrome, Edge or Firefox</b> on a computer (or Chrome on Android). iPhone/iPad can't do this.</li>
+<li>Plug the kit in with a <b>data</b> USB-C cable.</li>
+<li>Put it in download mode: hold <b>USER</b>, tap <b>RST</b>, let go of <b>USER</b>.</li>
+</ol>
+</div>
+
+<div class="card">
+<h2>Heltec V4 Expansion Kit (original, touch)</h2>
+<p class="muted">WiFi LoRa 32 V4 in the 2.8" touch case. If your board says <b>V4-R8</b>, use the next one.</p>
+<esp-web-install-button manifest="firmware/hoptics-mt-heltec-v4-expansion-kit/manifest.json">
+  <button slot="activate">Install for V4 kit</button>
+  <span slot="unsupported">Your browser can't flash devices. Use Chrome or Edge on a computer.</span>
+  <span slot="not-allowed">This page must be opened over https.</span>
+</esp-web-install-button>
+</div>
+
+<div class="card">
+<h2>Heltec V4-R8 Expansion Kit V2 (touch, SD slot)</h2>
+<p class="muted">The newer kit with the V4-R8 board. It has a different pinout and its own build.</p>
+<esp-web-install-button manifest="firmware/hoptics-mt-heltec-v4-r8-expansion-kit-v2/manifest.json">
+  <button slot="activate">Install for V4-R8 kit</button>
+  <span slot="unsupported">Your browser can't flash devices. Use Chrome or Edge on a computer.</span>
+  <span slot="not-allowed">This page must be opened over https.</span>
+</esp-web-install-button>
+</div>
+
+<div class="card warn">
+<h2>Erase or not?</h2>
+<p><b>First time:</b> choose <b>Erase</b>. You get a clean start and new encryption keys (some factory images shipped
+with duplicate keys, see CVE-2025-52464). After it boots, the setup wizard asks for your region and name.</p>
+<p><b>Updating Hoptics:</b> don't erase, and your settings, nodes and messages are kept.</p>
+</div>
+
+<div class="card">
+<h2>After install</h2>
+<ul>
+<li>Pick your <b>region</b> in the setup wizard. The radio stays silent until you do.</li>
+<li>Phone app: Settings, then Phone app, then Bluetooth on. Pair with the PIN shown on screen.</li>
+<li>On Wi-Fi? Open <code>http://&lt;node-ip&gt;/hoptics</code> for the live dashboard.</li>
+<li>Want stock Meshtastic back? Use <a href="https://flasher.meshtastic.org">flasher.meshtastic.org</a> as usual.</li>
+</ul>
+<img src="screenshots/preview.png" alt="Hoptics MT screens">
+</div>
+<p class="muted">Hoptics MT is a personal project, not affiliated with Meshtastic. GPL-3.0. Built on Meshtastic firmware and device-ui.
+City data from GeoNames (CC BY 4.0).</p>
+</main>
+</body>
+</html>
