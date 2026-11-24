@@ -15,10 +15,10 @@ index 2b58bd1..a3e836a 100644
          tftSetup();
      }
 diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
-index 7f9fbc4..6a97eac 100644
+index 7f9fbc4..b0dc918 100644
 --- a/src/mesh/http/ContentHandler.cpp
 +++ b/src/mesh/http/ContentHandler.cpp
-@@ -38,6 +38,20 @@
+@@ -38,6 +38,25 @@
  // Includes for the https server
  //   https://github.com/fhessel/esp32_https_server
  #include <HTTPRequest.hpp>
@@ -31,15 +31,20 @@ index 7f9fbc4..6a97eac 100644
 +#include "mesh/http/HopticsWebPage.h"
 +#define HTTP_CORS_ORIGIN "https://client.meshtastic.org"
 +bool hoptics_copy_snapshot(std::string &out);
-+static void handleHopticsPage(HTTPRequest *req, HTTPResponse *res);
-+static void handleHopticsJson(HTTPRequest *req, HTTPResponse *res);
++namespace httpsserver
++{
++class HTTPRequest;
++class HTTPResponse;
++} // namespace httpsserver
++static void handleHopticsPage(httpsserver::HTTPRequest *req, httpsserver::HTTPResponse *res);
++static void handleHopticsJson(httpsserver::HTTPRequest *req, httpsserver::HTTPResponse *res);
 +#else
 +#define HTTP_CORS_ORIGIN "*"
 +#endif
  #include <HTTPResponse.hpp>
  #include <HTTPSServer.hpp>
  #include <HTTPServer.hpp>
-@@ -86,6 +100,14 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
+@@ -86,6 +105,14 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
      ResourceNode *nodeJsonFsBrowseStatic = new ResourceNode("/json/fs/browse/static", "GET", &handleFsBrowseStatic);
      ResourceNode *nodeJsonDelete = new ResourceNode("/json/fs/delete/static", "DELETE", &handleFsDeleteStatic);
  
@@ -54,7 +59,7 @@ index 7f9fbc4..6a97eac 100644
      ResourceNode *nodeRoot = new ResourceNode("/*", "GET", &handleStatic);
  
      // Secure nodes
-@@ -108,11 +130,15 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
+@@ -108,11 +135,15 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
      insecureServer->registerNode(nodeAPIv1ToRadio);
      insecureServer->registerNode(nodeAPIv1FromRadioOptions);
      insecureServer->registerNode(nodeAPIv1FromRadio);
@@ -70,7 +75,7 @@ index 7f9fbc4..6a97eac 100644
      insecureServer->registerNode(nodeJsonReport);
      insecureServer->registerNode(nodeAdmin);
      insecureServer->registerNode(nodeRoot); // This has to be last
-@@ -139,7 +165,7 @@ void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res)
+@@ -139,7 +170,7 @@ void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res)
  
      // Status code is 200 OK by default.
      res->setHeader("Content-Type", "application/x-protobuf");
@@ -79,7 +84,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
      res->setHeader("X-Protobuf-Schema", "https://raw.githubusercontent.com/meshtastic/protobufs/master/meshtastic/mesh.proto");
  
-@@ -189,7 +215,7 @@ void handleAPIv1ToRadio(HTTPRequest *req, HTTPResponse *res)
+@@ -189,7 +220,7 @@ void handleAPIv1ToRadio(HTTPRequest *req, HTTPResponse *res)
  
      res->setHeader("Content-Type", "application/x-protobuf");
      res->setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -88,7 +93,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "PUT, OPTIONS");
      res->setHeader("X-Protobuf-Schema", "https://raw.githubusercontent.com/meshtastic/protobufs/master/meshtastic/mesh.proto");
  
-@@ -349,7 +375,7 @@ std::string htmlListDir(const char *dirname, uint8_t levels)
+@@ -349,7 +380,7 @@ std::string htmlListDir(const char *dirname, uint8_t levels)
  void handleFsBrowseStatic(HTTPRequest *req, HTTPResponse *res)
  {
      res->setHeader("Content-Type", "application/json");
@@ -97,7 +102,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
  
      std::string fileList;
-@@ -383,7 +409,7 @@ void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
+@@ -383,7 +414,7 @@ void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
      std::string paramValDelete;
  
      res->setHeader("Content-Type", "application/json");
@@ -106,7 +111,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "DELETE");
  
      if (params->getQueryParameter("delete", paramValDelete)) {
-@@ -648,7 +674,7 @@ void handleReport(HTTPRequest *req, HTTPResponse *res)
+@@ -648,7 +679,7 @@ void handleReport(HTTPRequest *req, HTTPResponse *res)
  
      if (content == "json") {
          res->setHeader("Content-Type", "application/json");
@@ -115,7 +120,7 @@ index 7f9fbc4..6a97eac 100644
          res->setHeader("Access-Control-Allow-Methods", "GET");
      } else {
          res->setHeader("Content-Type", "text/html");
-@@ -780,7 +806,7 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
+@@ -780,7 +811,7 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
  
      if (content == "json") {
          res->setHeader("Content-Type", "application/json");
@@ -124,7 +129,7 @@ index 7f9fbc4..6a97eac 100644
          res->setHeader("Access-Control-Allow-Methods", "GET");
      } else {
          res->setHeader("Content-Type", "text/html");
-@@ -860,7 +886,7 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
+@@ -860,7 +891,7 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
  void handleAdmin(HTTPRequest *req, HTTPResponse *res)
  {
      res->setHeader("Content-Type", "text/html");
@@ -133,7 +138,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
  
      res->println("<h1>Meshtastic</h1>");
-@@ -872,7 +898,7 @@ void handleAdmin(HTTPRequest *req, HTTPResponse *res)
+@@ -872,7 +903,7 @@ void handleAdmin(HTTPRequest *req, HTTPResponse *res)
  void handleRestart(HTTPRequest *req, HTTPResponse *res)
  {
      res->setHeader("Content-Type", "text/html");
@@ -142,7 +147,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
  
      res->println("<h1>Meshtastic</h1>");
-@@ -885,7 +911,7 @@ void handleRestart(HTTPRequest *req, HTTPResponse *res)
+@@ -885,7 +916,7 @@ void handleRestart(HTTPRequest *req, HTTPResponse *res)
  void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
  {
      res->setHeader("Content-Type", "application/json");
@@ -151,7 +156,7 @@ index 7f9fbc4..6a97eac 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
      // res->setHeader("Content-Type", "text/html");
  
-@@ -924,3 +950,43 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+@@ -924,3 +955,43 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
      writeAll(res, out);
  }
  #endif
