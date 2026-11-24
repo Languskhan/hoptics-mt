@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unistd.h>
 
 static const int WD = 240, HT = 320;
 static uint16_t fb[WD * HT];
@@ -23,17 +24,34 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
 }
 static uint32_t tick_cb(void) { return fakeMs; }
 
+static HopticsUI *gui = nullptr;
+
+// let the map worker finish (tiles come from local files here), then pick up its picture
+static void settleMap(void)
+{
+    for (int i = 0; i < 2000 && !hoptics::TileMap::get().idle(); i++)
+        usleep(1000);
+    usleep(3000);
+    if (gui) {
+        gui->mapNoteTick = 0;
+        gui->service();
+    }
+}
+
 static void pump(int ms)
 {
     for (int i = 0; i < ms; i += 10) {
         fakeMs += 10;
         lv_timer_handler();
+        if (gui)
+            gui->service();
     }
     lv_refr_now(NULL);
 }
 
 static void shot(const char *name)
 {
+    settleMap();
     lv_obj_invalidate(lv_screen_active());
     lv_refr_now(NULL);
     std::string path = std::string("shots/") + name + ".ppm";
@@ -59,7 +77,11 @@ int main(int argc, char **argv)
     lv_display_set_buffers(d, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(d, flush_cb);
 
+    // street map: stand-in tiles from make_test_tiles.py instead of the internet, saved tiles in a scratch dir
+    system("rm -rf /tmp/hm-harness");
+    hoptics::TileMap::hostSetup("/tmp/hm-harness", "/tmp/tilesrc");
     HopticsUI ui;
+    gui = &ui;
     uint32_t now = 1795999000; // late Nov 2026
     ui.setTime(now);
     ui.createBootScreen("2.8.3.e42ae67");
@@ -200,6 +222,37 @@ int main(int argc, char **argv)
     pump(350);
     shot("11b_map_pings");
     pump(2000);
+    // street level, then drag
+    for (int i = 0; i < 4; i++) {
+        ui.mapZ++;
+        ui.mapCX *= 2;
+        ui.mapCY *= 2;
+    }
+    ui.mapUserZoom = true;
+    ui.refreshMap();
+    shot("12_map_street");
+    ui.mapCommitPan(-70, 45);
+    shot("13_map_dragged");
+    // a zoom level with nothing saved while Wi-Fi is off
+    hoptics::TileMap::hostSetOnline(false);
+    ui.mapZ++;
+    ui.mapCX *= 2;
+    ui.mapCY *= 2;
+    ui.refreshMap();
+    shot("14_map_offline");
+    hoptics::TileMap::hostSetOnline(true);
+    pump(100);
+    shot("14b_map_back_online");
+    // Fit again for the theme shots
+    ui.mapUserZoom = false;
+    ui.mapUserPan = false;
+    ui.mapFit();
+    ui.refreshMap();
+    {
+        hoptics::MapStatus ms = hoptics::TileMap::get().status();
+        printf("map: need %u shown %u pending %u saved %u tiles %u KB z=%d\n", ms.need, ms.shown, ms.pending, ms.savedTiles,
+               ms.savedKB, ui.mapZ);
+    }
 
     ui.openChat(1);
     pump(100);
@@ -282,6 +335,34 @@ int main(int argc, char **argv)
     ui.openSettings();
     pump(50);
     shot("24_settings_daylight");
+    ui.setTheme(0);
+    ui.hasBluetooth = true;
+    ui.setBluetoothEnabled(true, 482913);
+    ui.setNetwork(true, true, 0x05000a0a, true, -58);
+    ui.setWifiConfig("NB", true);
+    ui.setLnaMode(3);
+    ui.openSettings();
+    pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setLnaDd, LV_ANIM_OFF);
+    pump(20);
+    shot("43_settings_lna");
+    lv_obj_scroll_to_view_recursive(ui.setPsk, LV_ANIM_OFF); lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setPsk))), 0, -90, LV_ANIM_OFF);
+    pump(20);
+    shot("44_settings_wifi");
+    lv_obj_scroll_to_view_recursive(ui.setMapSw, LV_ANIM_OFF);
+    pump(20);
+    shot("45_settings_map");
+    ui.openSettings();
+    pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setBt, LV_ANIM_OFF);
+    pump(20);
+    shot("40_settings_phone_mode");
+    ui.showPhoneMode(482913, false);
+    pump(30);
+    shot("41_phone_mode");
+    ui.showPhoneMode(0, true);
+    pump(30);
+    shot("42_phone_mode_leaving");
     { lv_mem_monitor_t mon; lv_mem_monitor(&mon); printf("LVGL mem after theme switches: %u KB used (max %u KB, frag %u%%)\n", (unsigned)((mon.total_size-mon.free_size)/1024), (unsigned)(mon.max_used/1024), (unsigned)mon.frag_pct); }
     return 0;
 }
