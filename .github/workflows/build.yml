@@ -95,8 +95,8 @@ jobs:
             ~/.cache/pip
           key: pio-${{ matrix.env }}-${{ env.FIRMWARE_REF }}
 
-      - name: Install PlatformIO
-        run: pip install -U platformio
+      - name: Install PlatformIO (same pinned tools as Meshtastic's own CI)
+        run: pip install -r fw/.github/actions/setup-base/requirements.txt
 
       - name: Build
         working-directory: fw
