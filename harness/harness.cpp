@@ -372,6 +372,10 @@ int main(int argc, char **argv)
     lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -40, LV_ANIM_OFF);
     pump(20);
     shot("50_settings_device");
+    lv_obj_scroll_to_view_recursive(ui.setShutdownBtn, LV_ANIM_OFF);
+    lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -70, LV_ANIM_OFF);
+    pump(20);
+    shot("50c_settings_report_button");
     ui.openReport(false);
     pump(20);
     shot("47_report_problem");
