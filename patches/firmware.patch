@@ -512,7 +512,7 @@ index 44d2400..c4311cb 100644
      static constexpr uint16_t nodeInfoTargetEntries() { return kNodeInfoCacheEntries; }
  
 diff --git a/variants/esp32s3/heltec_v4/platformio.ini b/variants/esp32s3/heltec_v4/platformio.ini
-index 73a863d..552c04b 100644
+index 73a863d..3215a82 100644
 --- a/variants/esp32s3/heltec_v4/platformio.ini
 +++ b/variants/esp32s3/heltec_v4/platformio.ini
 @@ -69,7 +69,7 @@ build_flags =
@@ -524,3 +524,34 @@ index 73a863d..552c04b 100644
    -D LV_CACHE_DEF_SIZE=0
    -D LV_LVGL_H_INCLUDE_SIMPLE
    -D LV_CONF_INCLUDE_SIMPLE
+@@ -139,3 +139,11 @@ lib_deps = ${heltec_v4_base.lib_deps}
+ custom_sdkconfig =
+   ${esp32s3_base.custom_sdkconfig}
+   ${device-ui_base.custom_sdkconfig}
++  ; Hoptics MT: keep a crash summary (core dump) in the coredump partition so the
++  ; radio can show what crashed after it restarts (Meshtastic turns this off)
++  CONFIG_ESP_COREDUMP_ENABLE=y
++  CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
++  '# CONFIG_ESP_COREDUMP_ENABLE_TO_NONE is not set'
++  CONFIG_ESP32_ENABLE_COREDUMP=y
++  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
++  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+diff --git a/variants/esp32s3/heltec_v4_r8/platformio.ini b/variants/esp32s3/heltec_v4_r8/platformio.ini
+index bf7f08a..6a07e95 100644
+--- a/variants/esp32s3/heltec_v4_r8/platformio.ini
++++ b/variants/esp32s3/heltec_v4_r8/platformio.ini
+@@ -148,6 +148,14 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
+ custom_sdkconfig =
+   ${esp32s3_base.custom_sdkconfig}
+   ${device-ui_base.custom_sdkconfig}
++  ; Hoptics MT: keep a crash summary (core dump) in the coredump partition so the
++  ; radio can show what crashed after it restarts (Meshtastic turns this off)
++  CONFIG_ESP_COREDUMP_ENABLE=y
++  CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
++  '# CONFIG_ESP_COREDUMP_ENABLE_TO_NONE is not set'
++  CONFIG_ESP32_ENABLE_COREDUMP=y
++  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
++  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+ 
+ extra_scripts =
+   ${heltec_v4_r8_base.extra_scripts}

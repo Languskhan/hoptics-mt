@@ -1191,10 +1191,10 @@ index 71cbee1..a0f7440 100644
  #define LV_USE_CHECKBOX 1
 diff --git a/source/graphics/TFT/HopticsReport.cpp b/source/graphics/TFT/HopticsReport.cpp
 new file mode 100644
-index 0000000..8873e4b
+index 0000000..8f66cfd
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsReport.cpp
-@@ -0,0 +1,391 @@
+@@ -0,0 +1,399 @@
 +#include "graphics/view/TFT/HopticsReport.h"
 +#include "graphics/view/TFT/HopticsUI.h" // HOPTICS_VERSION
 +#include <cstdio>
@@ -1202,10 +1202,16 @@ index 0000000..8873e4b
 +#include <cstring>
 +
 +#if defined(ARDUINO_ARCH_ESP32)
++#include "sdkconfig.h"
 +#include "esp_app_desc.h"
 +#include "esp_attr.h"
-+#include "esp_core_dump.h"
 +#include "esp_heap_caps.h"
++// the crash summary needs core dumps saved to flash in ELF format (the Hoptics builds turn this on;
++// without it a report still has the restart reason, uptime and memory, just no crash address)
++#if defined(CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH) && defined(CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF)
++#define HOPTICS_COREDUMP 1
++#include "esp_core_dump.h"
++#endif
 +#include "esp_system.h"
 +#include "esp_timer.h"
 +#include "nvs.h"
@@ -1389,6 +1395,7 @@ index 0000000..8873e4b
 +        } else {
 +            snprintf(r.reason, sizeof(r.reason), "%s",
 +                     rr == ESP_RST_TASK_WDT ? "task watchdog" : (rr == ESP_RST_INT_WDT ? "interrupt watchdog" : (kind == CK_WATCHDOG ? "watchdog" : "crash")));
++#if defined(HOPTICS_COREDUMP)
 +            // the crash summary the panic handler wrote to the coredump partition
 +            if (esp_core_dump_image_check() == ESP_OK) {
 +                esp_core_dump_summary_t *s = (esp_core_dump_summary_t *)calloc(1, sizeof(esp_core_dump_summary_t));
@@ -1416,6 +1423,7 @@ index 0000000..8873e4b
 +                // the next crash writes a new dump; never report this one twice
 +                esp_core_dump_image_erase();
 +            }
++#endif
 +        }
 +        rec = r;
 +        fresh = true;
