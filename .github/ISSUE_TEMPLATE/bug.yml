@@ -1,0 +1,46 @@
+name: Problem or crash report
+description: Something broke, froze, or the radio restarted on its own
+title: "Problem: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Hoptics MT! If you scanned the QR code on the radio (**Settings → DEVICE → Report a problem**, or the **Crash report** screen that appears after a crash), the device details below are already filled in.
+        No node number, position or Wi-Fi name is included in them.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What were you doing, and what did you expect instead? Steps to make it happen again help a lot.
+      placeholder: I opened the Map tab, zoomed in twice, and the screen froze for about 10 seconds...
+    validations:
+      required: true
+  - type: dropdown
+    id: board
+    attributes:
+      label: Which kit?
+      options:
+        - Heltec V4 Expansion Kit (original)
+        - Heltec V4-R8 Expansion Kit V2
+        - Not sure
+  - type: dropdown
+    id: often
+    attributes:
+      label: How often does it happen?
+      options:
+        - Once so far
+        - Sometimes
+        - Every time
+        - It keeps restarting
+  - type: textarea
+    id: device
+    attributes:
+      label: Device details
+      description: Filled in automatically from the radio's QR code. Reporting by hand? Copy the small lines under the code on the Report a problem screen.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Photos or logs
+      description: Drag in a photo of the screen, or paste a serial log if you have one.
