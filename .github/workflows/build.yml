@@ -98,10 +98,15 @@ jobs:
       - name: Install PlatformIO (same pinned tools as Meshtastic's own CI)
         run: pip install -r fw/.github/actions/setup-base/requirements.txt
 
+      - name: Pin pioarduino (6.2.0.post1 fails its own ">=6.2.0" platform check)
+        run: echo "pioarduino==6.2.0" > "$RUNNER_TEMP/pio-constraints.txt"
+
       - name: Build
         working-directory: fw
         env:
           PLATFORMIO_BUILD_FLAGS: -DHOPTICS_UI ${{ matrix.flags }}
+          UV_CONSTRAINT: ${{ runner.temp }}/pio-constraints.txt # the platform installs its own tools with uv
+          PIP_CONSTRAINT: ${{ runner.temp }}/pio-constraints.txt # ...or pip as a fallback
         run: pio run -e ${{ matrix.env }}
 
       - name: Collect binaries
