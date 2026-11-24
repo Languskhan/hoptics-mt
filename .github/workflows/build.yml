@@ -78,6 +78,9 @@ jobs:
           git -C device-ui apply --whitespace=nowarn "$GITHUB_WORKSPACE/patches/device-ui.patch"
           git -C fw apply --whitespace=nowarn "$GITHUB_WORKSPACE/patches/firmware.patch"
           python tools/embed_web.py web/hoptics.html fw/src/mesh/http/HopticsWebPage.h
+          # boot-screen art: three original designs from tools/make_boot_bg.py, shown in rotation (one per boot)
+          pip install --quiet pillow
+          python tools/png_to_lvgl.py device-ui/include/graphics/view/TFT/HopticsBootBg.h assets/boot_bg_ridgelines.png assets/boot_bg_constellation.png assets/boot_bg_aurora.png
           # offline city locator: GeoNames towns >= 5000 people (CC BY 4.0). Build still works without it.
           if curl -fsSL --retry 3 -o cities5000.zip https://download.geonames.org/export/dump/cities5000.zip; then
             python tools/build_cities.py cities5000.zip device-ui/include/graphics/view/TFT/HopticsCities.h
