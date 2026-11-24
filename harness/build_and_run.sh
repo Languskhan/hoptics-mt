@@ -16,5 +16,6 @@ for f in adler32 crc32 infback inffast inflate inftrees zutil; do gcc -c -O2 $DE
 g++ -std=c++20 -O1 $DEFS $INC -c $P/PNGdec.cpp -o PNGdec.o
 g++ -std=c++20 -O1 $DEFS $INC -c $D/source/graphics/TFT/HopticsUI.cpp -o HopticsUI.o
 g++ -std=c++20 -O1 $DEFS $INC -c $D/source/graphics/TFT/HopticsTiles.cpp -o HopticsTiles.o
-g++ -std=c++20 -O1 $DEFS $INC harness.cpp HopticsUI.o HopticsTiles.o PNGdec.o z_*.o font*.o $L/../lvgl-build/liblvgl.a -lm -lpthread -o harness
+g++ -std=c++20 -O1 $DEFS $INC -c $D/source/graphics/TFT/HopticsReport.cpp -o HopticsReport.o
+g++ -std=c++20 -O1 $DEFS $INC harness.cpp HopticsUI.o HopticsTiles.o HopticsReport.o PNGdec.o z_*.o font*.o $L/../lvgl-build/liblvgl.a -lm -lpthread -o harness
 ./harness

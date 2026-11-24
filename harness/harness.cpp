@@ -3,6 +3,7 @@
 #define private public
 #include "graphics/view/TFT/HopticsUI.h"
 #undef private
+#include "graphics/view/TFT/HopticsReport.h"
 #include "lvgl.h"
 #include <cstdio>
 #include <cstdlib>
@@ -339,7 +340,7 @@ int main(int argc, char **argv)
     ui.hasBluetooth = true;
     ui.setBluetoothEnabled(true, 482913);
     ui.setNetwork(true, true, 0x05000a0a, true, -58);
-    ui.setWifiConfig("NB", true);
+    ui.setWifiConfig("HomeWiFi", true);
     ui.setLnaMode(3);
     ui.openSettings();
     pump(20);
@@ -362,6 +363,67 @@ int main(int argc, char **argv)
     pump(20);
     shot("46b_sound_list");
     lv_dropdown_close(ui.setToneDd);
+    ui.closeSettings();
+    // problem reports: plain report from Settings, then a fresh crash and a restart loop
+    ui.setDeviceInfo("2.8.3.e42ae67", 0, true, true);
+    ui.openSettings();
+    pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setInfo, LV_ANIM_OFF);
+    lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -40, LV_ANIM_OFF);
+    pump(20);
+    shot("50_settings_device");
+    ui.openReport(false);
+    pump(20);
+    shot("47_report_problem");
+    ui.closeReport();
+    ui.closeSettings();
+    {
+        hoptics::CrashRecord r;
+        r.kind = hoptics::CK_CRASH;
+        r.count = 2;
+        r.streak = 1;
+        r.build = 13;
+        snprintf(r.ver, sizeof(r.ver), "0.2.1");
+        snprintf(r.reason, sizeof(r.reason), "abort()");
+        snprintf(r.task, sizeof(r.task), "loopTask");
+        r.pc = 0x421e9caf;
+        const uint32_t bt[8] = {0x421e9ce4, 0x421e9dbf, 0x421e9e52, 0x42013111, 0x42013146, 0x420134a3, 0x42076661, 0x420ad25e};
+        for (int i = 0; i < 8; i++)
+            r.bt[i] = bt[i];
+        r.btDepth = 8;
+        r.upSecs = 12;
+        r.heapKB = 84;
+        r.psramKB = 92;
+        hoptics::Report::get().inject(r, true);
+        ui.crashShown = false;
+        ui.showCrashReportIfAny();
+        pump(20);
+        shot("48_report_crash");
+        lv_obj_scroll_to_y(lv_obj_get_child(ui.repOv, 1), 400, LV_ANIM_OFF);
+        pump(20);
+        shot("48b_report_crash_details");
+        ui.closeReport();
+        r.streak = 4;
+        r.count = 5;
+        hoptics::Report::get().inject(r, true);
+        ui.openReport(true);
+        pump(20);
+        shot("49_report_loop");
+        ui.closeReport();
+        ui.openSettings();
+        pump(20);
+        lv_obj_scroll_to_view_recursive(ui.setInfo, LV_ANIM_OFF);
+        lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -40, LV_ANIM_OFF);
+        pump(20);
+        shot("50b_settings_device_crash");
+        ui.closeSettings();
+        std::string d = hoptics::Report::get().details("2.8.3.e42ae67", ui.reportStatus());
+        std::string u = hoptics::Report::get().issueUrl(true, d);
+        FILE *uf = fopen("shots/report_url.txt", "w");
+        fprintf(uf, "%s\n", u.c_str());
+        fclose(uf);
+        printf("report url %zu chars\n", u.size());
+    }
     ui.openSettings();
     pump(20);
     lv_obj_scroll_to_view_recursive(ui.setBt, LV_ANIM_OFF);
