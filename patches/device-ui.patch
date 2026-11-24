@@ -232,6 +232,111 @@ index 0000000..49fcdc5
 +    "-----END CERTIFICATE-----\n"
 +    ;
 +// clang-format on
+diff --git a/include/graphics/view/TFT/HopticsReport.h b/include/graphics/view/TFT/HopticsReport.h
+new file mode 100644
+index 0000000..3ee18db
+--- /dev/null
++++ b/include/graphics/view/TFT/HopticsReport.h
+@@ -0,0 +1,99 @@
++#pragma once
++/**
++ * Hoptics MT - problem reports.
++ *
++ * At start-up this works out why the radio restarted. After a crash it reads the crash summary
++ * the ESP32 saved to flash (core dump: crashing task, program counter, backtrace) plus a few
++ * numbers kept in RTC memory that survives the reset (uptime and free memory just before), and
++ * stores a small record in NVS. The UI turns that into a QR code that opens a GitHub bug report
++ * with the details already filled in.
++ *
++ * Nothing here sends data anywhere: the person scans the code and decides whether to submit.
++ * No node number, position or Wi-Fi name is ever put into a report.
++ *
++ * GPL-3.0, same as device-ui.
++ */
++
++#include <stdint.h>
++#include <string>
++
++#ifndef HOPTICS_BUILD
++#define HOPTICS_BUILD 0 // CI passes its run number; 0 = local build
++#endif
++#ifndef HOPTICS_REPORT_URL
++#define HOPTICS_REPORT_URL "https://github.com/Languskhan/hoptics-mt/issues/new"
++#endif
++#ifndef HOPTICS_REPORT_TEMPLATE
++#define HOPTICS_REPORT_TEMPLATE "bug.yml"
++#endif
++
++namespace hoptics
++{
++
++enum CrashKind : uint8_t { CK_NONE = 0, CK_CRASH, CK_WATCHDOG, CK_POWER };
++
++// stored as one NVS blob: keep it plain data, bump `version` if the layout changes
++struct CrashRecord {
++    uint8_t version = 1;
++    uint8_t kind = CK_NONE;
++    uint8_t btDepth = 0;
++    uint8_t streak = 0;             // crashes in a row, each within 2 minutes of starting
++    uint16_t count = 0;             // crashes since the record was last cleared
++    uint16_t build = 0;             // HOPTICS_BUILD of the firmware that crashed
++    uint32_t pc = 0;                // program counter at the crash (0 = no core dump)
++    uint32_t bt[8] = {0};           // backtrace
++    uint32_t upSecs = 0;            // how long it had been running (0 = unknown)
++    uint16_t heapKB = 0xffff;       // free internal RAM shortly before (0xffff = unknown)
++    uint16_t psramKB = 0xffff;      // free PSRAM shortly before
++    char reason[40] = {0};          // "abort()", "LoadProhibited", "Task watchdog", ...
++    char task[16] = {0};            // FreeRTOS task that crashed
++    char ver[12] = {0};             // HOPTICS_VERSION that crashed
++};
++
++class Report
++{
++  public:
++    static Report &get(void);
++
++    void begin(void); // once at start-up
++    void tick(void);  // about once a second: refreshes the numbers that survive a crash
++
++    bool hasCrash(void) const { return rec.kind != CK_NONE; }
++    bool freshCrash(void) const { return fresh; } // this start-up followed a crash
++    void ackFresh(void) { fresh = false; }
++    const CrashRecord &crash(void) const { return rec; }
++    void clearCrash(void);
++    const char *lastStart(void) const { return startText; } // why this start-up happened
++
++    static const char *board(void);
++    static uint32_t uptimeSecs(void);
++    static void memoryKB(uint32_t &heap, uint32_t &psram);
++    static std::string duration(uint32_t secs); // "12 s", "4 min", "2 h 13 min"
++
++    // "abort() in loopTask, 12 s after start" (for the screen)
++    std::string crashLine(void) const;
++    // compact lines for the bug report; `fw` = Meshtastic version, `status` = live UI state
++    std::string details(const char *fw, const std::string &status) const;
++    // GitHub "new issue" link with the form filled in (kept short so the QR code stays scannable)
++    std::string issueUrl(bool crashTitle, const std::string &details) const;
++
++    // host harness / tests: pretend a crash happened
++    void inject(const CrashRecord &r, bool isFresh)
++    {
++        rec = r;
++        fresh = isFresh;
++    }
++
++  private:
++    void save(void);
++    void load(void);
++
++    CrashRecord rec;
++    bool fresh = false;
++    bool begun = false;
++    char startText[20] = "power on";
++};
++
++std::string urlEncode(const std::string &s);
++
++} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsTiles.h b/include/graphics/view/TFT/HopticsTiles.h
 new file mode 100644
 index 0000000..3e6006c
@@ -439,10 +544,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..90766dd
+index 0000000..195cf81
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,496 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -492,7 +597,7 @@ index 0000000..90766dd
 +#define HOPTICS_NAME "HOPTICS MT"
 +#endif
 +#ifndef HOPTICS_VERSION
-+#define HOPTICS_VERSION "0.2.0"
++#define HOPTICS_VERSION "0.2.1"
 +#endif
 +
 +class HopticsUI
@@ -679,6 +784,11 @@ index 0000000..90766dd
 +    void setMapTiles(bool on);
 +    bool mapTilesOn(void) const { return mapTiles; }
 +
++    // problem reports: a QR code that opens a pre-filled GitHub bug report (see HopticsReport.h)
++    void openReport(bool forCrash);
++    void closeReport(void);
++    void showCrashReportIfAny(void); // after a crash restart: shows the report once
++
 +  private:
 +    // ---------- screens ----------
 +    enum Tab { T_HOME, T_LIVE, T_MAP, T_CHAT, T_NODES, T_STATS, T_COUNT };
@@ -709,6 +819,8 @@ index 0000000..90766dd
 +    void buildKeyboard(void);
 +    void buildWizard(void);
 +    void wizardStep(int step);
++    void buildReportOverlay(void);
++    std::string reportStatus(void) const;
 +    void lookupCity(Node &n);
 +
 +    void selectTab(Tab t);
@@ -818,6 +930,9 @@ index 0000000..90766dd
 +    lv_obj_t *phoneScreen = nullptr, *phoneMsg = nullptr, *phonePin = nullptr, *phoneBtn = nullptr;
 +    lv_obj_t *setToneDd = nullptr;
 +    int toneIdx = 1;
++    lv_obj_t *repOv = nullptr, *repTitle = nullptr, *repBanner = nullptr, *repBannerText = nullptr, *repQr = nullptr,
++             *repText = nullptr, *repClearBtn = nullptr;
++    bool repCrash = false, crashShown = false;
 +    lv_obj_t *setWifiSw = nullptr, *setSsid = nullptr, *setPsk = nullptr, *setLnaDd = nullptr, *setLnaRow = nullptr;
 +    char wifiSsid[33] = {0};
 +    bool wifiHasPsk = false;
@@ -1074,6 +1189,403 @@ index 71cbee1..a0f7440 100644
  
  /** Checkbox */
  #define LV_USE_CHECKBOX 1
+diff --git a/source/graphics/TFT/HopticsReport.cpp b/source/graphics/TFT/HopticsReport.cpp
+new file mode 100644
+index 0000000..8873e4b
+--- /dev/null
++++ b/source/graphics/TFT/HopticsReport.cpp
+@@ -0,0 +1,391 @@
++#include "graphics/view/TFT/HopticsReport.h"
++#include "graphics/view/TFT/HopticsUI.h" // HOPTICS_VERSION
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++#if defined(ARDUINO_ARCH_ESP32)
++#include "esp_app_desc.h"
++#include "esp_attr.h"
++#include "esp_core_dump.h"
++#include "esp_heap_caps.h"
++#include "esp_system.h"
++#include "esp_timer.h"
++#include "nvs.h"
++#include "util/ILog.h"
++#else
++#include <chrono>
++#endif
++
++namespace hoptics
++{
++
++#if defined(ARDUINO_ARCH_ESP32)
++namespace
++{
++// A few numbers kept in RTC memory: it is not cleared by a crash or watchdog reset, so at the
++// next start-up we know how long the radio had been running and how much memory was free.
++// After power-on it holds garbage, hence the magic word and check value.
++constexpr uint32_t kMagic = 0x48505431; // "HPT1"
++struct Crumbs {
++    uint32_t magic;
++    uint32_t upSecs;
++    uint16_t heapKB, psramKB;
++    uint8_t streak;
++    uint8_t pad[3];
++    uint32_t check;
++};
++RTC_NOINIT_ATTR Crumbs crumbs;
++
++uint32_t crumbCheck(const Crumbs &c)
++{
++    return (c.magic ^ (c.upSecs * 2654435761u) ^ (((uint32_t)c.heapKB << 16) | c.psramKB) ^ (c.streak * 40503u)) + 0x9e37;
++}
++bool crumbsValid(void)
++{
++    return crumbs.magic == kMagic && crumbs.check == crumbCheck(crumbs);
++}
++void crumbsSeal(void)
++{
++    crumbs.magic = kMagic;
++    crumbs.check = crumbCheck(crumbs);
++}
++
++// "abort() was called at PC 0x4201 on core 0" -> "abort()"; keeps assert text, drops addresses
++void shortReason(const char *in, char *out, size_t len)
++{
++    std::string s(in);
++    size_t p;
++    if ((p = s.find(" was called")) != std::string::npos)
++        s.resize(p);
++    if ((p = s.find(" on core")) != std::string::npos)
++        s.resize(p);
++    if ((p = s.find(" (")) != std::string::npos && s.rfind("assert", 0) != 0)
++        s.resize(p);
++    while (!s.empty() && (s.back() == ' ' || s.back() == '.' || s.back() == '\n'))
++        s.pop_back();
++    snprintf(out, len, "%s", s.c_str());
++}
++} // namespace
++#endif
++
++Report &Report::get(void)
++{
++    static Report r;
++    return r;
++}
++
++const char *Report::board(void)
++{
++#if defined(HELTEC_V4_R8)
++    return "V4-R8";
++#elif defined(HELTEC_V4)
++    return "V4";
++#elif defined(ARDUINO_ARCH_ESP32)
++    return "ESP32";
++#else
++    return "host";
++#endif
++}
++
++uint32_t Report::uptimeSecs(void)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    return (uint32_t)(esp_timer_get_time() / 1000000LL);
++#else
++    static auto t0 = std::chrono::steady_clock::now();
++    return (uint32_t)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count() + 7980;
++#endif
++}
++
++void Report::memoryKB(uint32_t &heap, uint32_t &psram)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    heap = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
++    psram = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
++#else
++    heap = 93;
++    psram = 525;
++#endif
++}
++
++std::string Report::duration(uint32_t s)
++{
++    char b[24];
++    if (s < 120)
++        snprintf(b, sizeof(b), "%u s", (unsigned)s);
++    else if (s < 3600)
++        snprintf(b, sizeof(b), "%u min", (unsigned)(s / 60));
++    else if (s < 172800)
++        snprintf(b, sizeof(b), "%u h %u min", (unsigned)(s / 3600), (unsigned)((s / 60) % 60));
++    else
++        snprintf(b, sizeof(b), "%u days", (unsigned)(s / 86400));
++    return b;
++}
++
++void Report::begin(void)
++{
++    if (begun)
++        return;
++    begun = true;
++    load();
++#if defined(ARDUINO_ARCH_ESP32)
++    esp_reset_reason_t rr = esp_reset_reason();
++    uint8_t kind = CK_NONE;
++    const char *why = "power on";
++    switch (rr) {
++    case ESP_RST_POWERON:
++        why = "power on";
++        break;
++    case ESP_RST_EXT:
++        why = "reset button";
++        break;
++    case ESP_RST_SW:
++        why = "restart";
++        break;
++    case ESP_RST_DEEPSLEEP:
++        why = "wake from sleep";
++        break;
++    case ESP_RST_USB:
++    case ESP_RST_JTAG:
++        why = "USB reset";
++        break;
++    case ESP_RST_PANIC:
++    case ESP_RST_CPU_LOCKUP:
++        why = "crash";
++        kind = CK_CRASH;
++        break;
++    case ESP_RST_INT_WDT:
++    case ESP_RST_TASK_WDT:
++    case ESP_RST_WDT:
++        why = "watchdog";
++        kind = CK_WATCHDOG;
++        break;
++    case ESP_RST_BROWNOUT:
++    case ESP_RST_PWR_GLITCH:
++        why = "power dip";
++        kind = CK_POWER;
++        break;
++    default:
++        why = "unknown";
++        break;
++    }
++    snprintf(startText, sizeof(startText), "%s", why);
++
++    bool had = crumbsValid();
++    if (kind != CK_NONE) {
++        CrashRecord r;
++        r.kind = kind;
++        r.count = (uint16_t)(rec.count + 1);
++        r.build = HOPTICS_BUILD;
++        snprintf(r.ver, sizeof(r.ver), "%s", HOPTICS_VERSION);
++        if (had) {
++            r.upSecs = crumbs.upSecs;
++            r.heapKB = crumbs.heapKB;
++            r.psramKB = crumbs.psramKB;
++            r.streak = (uint8_t)((crumbs.upSecs < 120 && crumbs.streak < 250) ? crumbs.streak + 1 : 1);
++        } else {
++            r.streak = 1;
++        }
++        if (kind == CK_POWER) {
++            snprintf(r.reason, sizeof(r.reason), "power dipped");
++        } else {
++            snprintf(r.reason, sizeof(r.reason), "%s",
++                     rr == ESP_RST_TASK_WDT ? "task watchdog" : (rr == ESP_RST_INT_WDT ? "interrupt watchdog" : (kind == CK_WATCHDOG ? "watchdog" : "crash")));
++            // the crash summary the panic handler wrote to the coredump partition
++            if (esp_core_dump_image_check() == ESP_OK) {
++                esp_core_dump_summary_t *s = (esp_core_dump_summary_t *)calloc(1, sizeof(esp_core_dump_summary_t));
++                if (s && esp_core_dump_get_summary(s) == ESP_OK) {
++                    char mine[16] = {0};
++                    esp_app_get_elf_sha256(mine, sizeof(mine));
++                    // an older dump from different firmware would point at the wrong code
++                    if (strncmp((const char *)s->app_elf_sha256, mine, 8) == 0) {
++                        snprintf(r.task, sizeof(r.task), "%s", s->exc_task);
++                        r.pc = s->exc_pc;
++                        uint32_t n = s->exc_bt_info.depth;
++                        uint8_t k = 0;
++                        for (uint32_t i = 0; i < n && i < 16 && k < 8; i++) {
++                            uint32_t a = s->exc_bt_info.bt[i];
++                            if (a && a != r.pc)
++                                r.bt[k++] = a;
++                        }
++                        r.btDepth = k;
++                    }
++                }
++                char pr[96] = {0};
++                if (esp_core_dump_get_panic_reason(pr, sizeof(pr)) == ESP_OK && pr[0])
++                    shortReason(pr, r.reason, sizeof(r.reason));
++                free(s);
++                // the next crash writes a new dump; never report this one twice
++                esp_core_dump_image_erase();
++            }
++        }
++        rec = r;
++        fresh = true;
++        save();
++        ILOG_WARN("Hoptics: restarted after %s (%s in %s, pc 0x%08x, up %u s, %u in a row, %u total)", why, rec.reason,
++                  rec.task[0] ? rec.task : "?", (unsigned)rec.pc, (unsigned)rec.upSecs, (unsigned)rec.streak, (unsigned)rec.count);
++    } else {
++        ILOG_INFO("Hoptics: start-up after %s", why);
++    }
++    crumbs.upSecs = 0;
++    crumbs.streak = fresh ? rec.streak : 0;
++    crumbs.heapKB = crumbs.psramKB = 0xffff;
++    crumbsSeal();
++#endif
++}
++
++void Report::tick(void)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    uint32_t heap, psram;
++    memoryKB(heap, psram);
++    crumbs.upSecs = uptimeSecs();
++    crumbs.heapKB = (uint16_t)(heap > 0xfffe ? 0xfffe : heap);
++    crumbs.psramKB = (uint16_t)(psram > 0xfffe ? 0xfffe : psram);
++    if (crumbs.upSecs >= 120)
++        crumbs.streak = 0; // it stayed up: no longer a restart loop
++    crumbsSeal();
++#endif
++}
++
++void Report::clearCrash(void)
++{
++    rec = CrashRecord();
++    fresh = false;
++    save();
++}
++
++void Report::save(void)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READWRITE, &h) == ESP_OK) {
++        if (rec.kind == CK_NONE)
++            nvs_erase_key(h, "crash");
++        else
++            nvs_set_blob(h, "crash", &rec, sizeof(rec));
++        nvs_commit(h);
++        nvs_close(h);
++    }
++#endif
++}
++
++void Report::load(void)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READONLY, &h) == ESP_OK) {
++        CrashRecord r;
++        size_t len = sizeof(r);
++        if (nvs_get_blob(h, "crash", &r, &len) == ESP_OK && len == sizeof(r) && r.version == 1) {
++            r.reason[sizeof(r.reason) - 1] = 0;
++            r.task[sizeof(r.task) - 1] = 0;
++            r.ver[sizeof(r.ver) - 1] = 0;
++            rec = r;
++        }
++        nvs_close(h);
++    }
++#endif
++}
++
++std::string Report::crashLine(void) const
++{
++    if (rec.kind == CK_NONE)
++        return "";
++    std::string s;
++    if (rec.kind == CK_POWER)
++        s = "Power dipped (low battery or loose cable)";
++    else if (rec.kind == CK_WATCHDOG)
++        s = std::string("Froze, restarted by the ") + rec.reason;
++    else
++        s = rec.reason;
++    if (rec.task[0])
++        s += std::string(" in ") + rec.task;
++    if (rec.upSecs)
++        s += ", " + duration(rec.upSecs) + " after start";
++    return s;
++}
++
++// "12s", "4m", "2h13m", "3d" - for the report, where every character counts
++static std::string shortDur(uint32_t s)
++{
++    char b[16];
++    if (s < 120)
++        snprintf(b, sizeof(b), "%us", (unsigned)s);
++    else if (s < 3600)
++        snprintf(b, sizeof(b), "%um", (unsigned)(s / 60));
++    else if (s < 172800)
++        snprintf(b, sizeof(b), "%uh%02um", (unsigned)(s / 3600), (unsigned)((s / 60) % 60));
++    else
++        snprintf(b, sizeof(b), "%ud", (unsigned)(s / 86400));
++    return b;
++}
++
++std::string Report::details(const char *fw, const std::string &status) const
++{
++    // compact on purpose: every character makes the QR code denser
++    char b[160];
++    std::string out;
++    snprintf(b, sizeof(b), "Hoptics %s b%u %s mt%s", HOPTICS_VERSION, (unsigned)HOPTICS_BUILD, board(), fw && fw[0] ? fw : "?");
++    out += b;
++    if (rec.kind != CK_NONE) {
++        static const char *tag[] = {"", "crash", "freeze", "power"};
++        snprintf(b, sizeof(b), "\n%s: %s%s%s up %s x%u/%u b%u", tag[rec.kind], rec.reason, rec.task[0] ? " in " : "", rec.task,
++                 rec.upSecs ? shortDur(rec.upSecs).c_str() : "?", (unsigned)rec.streak, (unsigned)rec.count, (unsigned)rec.build);
++        out += b;
++        if (rec.pc) {
++            snprintf(b, sizeof(b), "\npc %08x bt", (unsigned)rec.pc);
++            out += b;
++            for (int i = 0; i < rec.btDepth && i < 8; i++) {
++                snprintf(b, sizeof(b), " %08x", (unsigned)rec.bt[i]);
++                out += b;
++            }
++        }
++        if (rec.heapKB != 0xffff) {
++            snprintf(b, sizeof(b), "\nbefore %uk/%uk", (unsigned)rec.heapKB, (unsigned)rec.psramKB);
++            out += b;
++        }
++    }
++    uint32_t heap, psram;
++    memoryKB(heap, psram);
++    snprintf(b, sizeof(b), "\nnow: %s, up %s, %uk/%uk", startText, shortDur(uptimeSecs()).c_str(), (unsigned)heap, (unsigned)psram);
++    out += b;
++    if (!status.empty())
++        out += ", " + status;
++    return out;
++}
++
++std::string urlEncode(const std::string &s)
++{
++    static const char *hex = "0123456789ABCDEF";
++    std::string o;
++    o.reserve(s.size() + 16);
++    for (unsigned char c : s) {
++        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strchr("-_.~/:,()!*'", c)) {
++            o += (char)c;
++        } else if (c == ' ') {
++            o += '+';
++        } else {
++            o += '%';
++            o += hex[c >> 4];
++            o += hex[c & 15];
++        }
++    }
++    return o;
++}
++
++std::string Report::issueUrl(bool crashTitle, const std::string &details) const
++{
++    std::string title;
++    if (crashTitle && rec.kind == CK_POWER)
++        title = "Restart: power dipped";
++    else if (crashTitle && rec.kind != CK_NONE)
++        title = std::string(rec.kind == CK_WATCHDOG ? "Freeze: " : "Crash: ") + rec.reason;
++    else
++        title = "Problem: ";
++    return std::string(HOPTICS_REPORT_URL "?template=" HOPTICS_REPORT_TEMPLATE "&title=") + urlEncode(title) +
++           "&device=" + urlEncode(details);
++}
++
++} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsTiles.cpp b/source/graphics/TFT/HopticsTiles.cpp
 new file mode 100644
 index 0000000..6b086bc
@@ -2223,15 +2735,16 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..7bc8d03
+index 0000000..b85bdab
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,4649 @@
+@@ -0,0 +1,4800 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsUI.h"
++#include "graphics/view/TFT/HopticsReport.h"
 +#include <algorithm>
 +#include <cmath>
 +#include <cstdio>
@@ -3262,6 +3775,7 @@ index 0000000..7bc8d03
 +    buildChatOverlay();
 +    buildNodeOverlay();
 +    buildSettingsOverlay();
++    buildReportOverlay();
 +    buildWizard();
 +    buildKeyboard();
 +
@@ -3356,6 +3870,7 @@ index 0000000..7bc8d03
 +    bootScreen = nullptr; // auto-deleted by the load animation
 +    bootStatus = nullptr;
 +    maybeShowWizard();
++    showCrashReportIfAny();
 +}
 +
 +// ------------------------------------------------------------- status bar
@@ -5197,6 +5712,10 @@ index 0000000..7bc8d03
 +        },
 +        LV_EVENT_CLICKED, this);
 +
++    lv_obj_t *repBtn = flatButton(cdv, LV_SYMBOL_WARNING " Report a problem", C_CYAN, W() - 2 * PAD - 16, 36);
++    lv_obj_add_event_cb(
++        repBtn, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openReport(false); }, LV_EVENT_CLICKED, this);
++
 +    lv_obj_t *about = label(body, FSMALL, C_DIM, HOPTICS_NAME " v" HOPTICS_VERSION "  -  GPL-3.0\nBuilt on Meshtastic device-ui");
 +    lv_obj_set_width(about, LV_PCT(100));
 +    lv_obj_set_style_text_align(about, LV_TEXT_ALIGN_CENTER, 0);
@@ -5264,7 +5783,7 @@ index 0000000..7bc8d03
 +    else
 +        lv_obj_remove_flag(setShutdownBtn, LV_OBJ_FLAG_HIDDEN);
 +
-+    char buf[260], ipbuf[48];
++    char buf[400], ipbuf[48];
 +    if (wifiOn && wifiUp && ipAddr)
 +        snprintf(ipbuf, sizeof(ipbuf), "%u.%u.%u.%u", (unsigned)(ipAddr & 0xff), (unsigned)((ipAddr >> 8) & 0xff),
 +                 (unsigned)((ipAddr >> 16) & 0xff), (unsigned)(ipAddr >> 24));
@@ -5275,6 +5794,14 @@ index 0000000..7bc8d03
 +             (unsigned)myNode, fwVersion[0] ? fwVersion : "?", ipbuf, mqttUp ? "  (MQTT up)" : "",
 +             myBattery <= 100 ? (std::to_string(myBattery) + "%  (" + std::to_string(myVoltage).substr(0, 4) + " V)").c_str()
 +                              : (myBattery == 101 ? "external power" : "unknown"));
++    {
++        hoptics::Report &rp = hoptics::Report::get();
++        size_t n = strlen(buf);
++        if (rp.hasCrash())
++            snprintf(buf + n, sizeof(buf) - n, "\nLast crash: %s (%u so far)", rp.crashLine().c_str(), (unsigned)rp.crash().count);
++        else
++            snprintf(buf + n, sizeof(buf) - n, "\nStarted by: %s", rp.lastStart());
++    }
 +    lv_label_set_text(setInfo, buf);
 +    settingsLoading = false;
 +
@@ -6876,16 +7403,153 @@ index 0000000..7bc8d03
 +    lv_label_set_text(wizDots, dots[step]);
 +    setButtonText(wizNext, step == 2 ? LV_SYMBOL_OK " Finish" : "Next " LV_SYMBOL_RIGHT);
 +}
++
++// ================================================================= PROBLEM REPORTS
++// A QR code that opens a GitHub bug report with the firmware, board, crash summary and memory
++// numbers filled in. Nothing is sent from the radio: the person scans it and decides.
++void HopticsUI::buildReportOverlay(void)
++{
++    repOv = overlayPanel("Report a problem", &repTitle,
++                         [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeReport(); });
++    lv_obj_t *body = plain(repOv);
++    lv_obj_set_width(body, LV_PCT(100));
++    lv_obj_set_flex_grow(body, 1);
++    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_scroll_dir(body, LV_DIR_VER);
++    lv_obj_set_style_pad_bottom(body, PAD, 0);
++    column(body, PAD);
++
++    // the code itself: always black on white, full width, so phones read it in every theme
++    lv_obj_t *qbox = plain(body);
++    lv_obj_set_size(qbox, LV_PCT(100), W()); // square, so the code keeps a white margin on every side
++    lv_obj_set_style_bg_color(qbox, lv_color_white(), 0);
++    lv_obj_set_style_bg_opa(qbox, LV_OPA_COVER, 0);
++    repQr = lv_qrcode_create(qbox);
++    lv_qrcode_set_size(repQr, W() - 18); // 3 px squares up to version 14 (~360 bytes)
++    lv_qrcode_set_dark_color(repQr, lv_color_black());
++    lv_qrcode_set_light_color(repQr, lv_color_white());
++    lv_obj_center(repQr);
++
++    // what happened, right under the code (only when there is a crash on record)
++    repBanner = plain(body);
++    lv_obj_set_size(repBanner, LV_PCT(100), LV_SIZE_CONTENT);
++    lv_obj_set_style_bg_color(repBanner, C_RED, 0);
++    lv_obj_set_style_bg_opa(repBanner, LV_OPA_20, 0);
++    lv_obj_set_style_border_side(repBanner, LV_BORDER_SIDE_LEFT, 0);
++    lv_obj_set_style_border_width(repBanner, 4, 0);
++    lv_obj_set_style_border_color(repBanner, C_RED, 0);
++    lv_obj_set_style_pad_all(repBanner, 6, 0);
++    lv_obj_set_style_pad_left(repBanner, 9, 0);
++    repBannerText = label(repBanner, &F12, C_TEXT, "");
++    lv_obj_set_width(repBannerText, LV_PCT(100));
++    lv_label_set_long_mode(repBannerText, LV_LABEL_LONG_MODE_WRAP);
++
++    lv_obj_t *tb = plain(body);
++    lv_obj_set_size(tb, LV_PCT(100), LV_SIZE_CONTENT);
++    lv_obj_set_style_pad_hor(tb, PAD + 2, 0);
++    column(tb, PAD);
++    lv_obj_t *how = label(tb, &F12, C_TEXT,
++                          "Point your phone camera at the code. It opens a bug report on GitHub with these details "
++                          "filled in. Add what you were doing, then submit.");
++    lv_obj_set_width(how, LV_PCT(100));
++    lv_label_set_long_mode(how, LV_LABEL_LONG_MODE_WRAP);
++    lv_obj_t *alt = label(tb, &F12, C_MUTED,
++                          "No GitHub account? Take a photo of this screen and send it to whoever gave you the firmware.");
++    lv_obj_set_width(alt, LV_PCT(100));
++    lv_label_set_long_mode(alt, LV_LABEL_LONG_MODE_WRAP);
++    repText = label(tb, FSMALL, C_MUTED, "");
++    lv_obj_set_width(repText, LV_PCT(100));
++    lv_label_set_long_mode(repText, LV_LABEL_LONG_MODE_WRAP);
++    repClearBtn = flatButton(tb, LV_SYMBOL_TRASH " Clear crash record", C_AMBER, W() - 2 * PAD - 4, 34);
++    lv_obj_add_event_cb(
++        repClearBtn,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            hoptics::Report::get().clearCrash();
++            ui->openReport(false);
++            ui->showToast("Crash record cleared");
++        },
++        LV_EVENT_CLICKED, this);
++}
++
++std::string HopticsUI::reportStatus(void) const
++{
++    char b[96];
++    snprintf(b, sizeof(b), "%u nodes, wifi %s, mqtt %s", (unsigned)nodes.size(), wifiOn ? (wifiUp ? "up" : "on") : "off",
++             mqttUp ? "up" : "off");
++    return b;
++}
++
++void HopticsUI::openReport(bool forCrash)
++{
++    if (!repOv)
++        return;
++    hoptics::Report &rp = hoptics::Report::get();
++    repCrash = forCrash && rp.hasCrash();
++    std::string details = rp.details(fwVersion, reportStatus());
++    std::string url = rp.issueUrl(repCrash, details);
++    lv_qrcode_update(repQr, url.data(), (uint32_t)url.size());
++
++    lv_label_set_text(repTitle, repCrash ? "Crash report" : "Report a problem");
++    if (rp.hasCrash()) {
++        lv_color_t c = rp.crash().kind == hoptics::CK_POWER ? C_AMBER : C_RED;
++        lv_obj_set_style_bg_color(repBanner, c, 0);
++        lv_obj_set_style_border_color(repBanner, c, 0);
++        std::string t;
++        if (repCrash && rp.crash().streak >= 3)
++            t = "It keeps restarting. Unplug it if it doesn't settle, and please send this report.\n";
++        else if (repCrash && rp.crash().kind == hoptics::CK_POWER)
++            t = "The radio restarted because its power dipped.\n";
++        else if (repCrash)
++            t = "Hoptics MT restarted after a problem.\n";
++        else
++            t = "Last crash:\n";
++        t += rp.crashLine();
++        lv_label_set_text(repBannerText, t.c_str());
++        lv_obj_remove_flag(repBanner, LV_OBJ_FLAG_HIDDEN);
++        lv_obj_remove_flag(repClearBtn, LV_OBJ_FLAG_HIDDEN);
++    } else {
++        lv_obj_add_flag(repBanner, LV_OBJ_FLAG_HIDDEN);
++        lv_obj_add_flag(repClearBtn, LV_OBJ_FLAG_HIDDEN);
++    }
++    // same details as in the code, so a photo of the screen carries them too
++    lv_label_set_text(repText, details.c_str());
++
++    lv_obj_scroll_to_y(lv_obj_get_child(repOv, 1), 0, LV_ANIM_OFF);
++    lv_obj_remove_flag(repOv, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_to_index(repOv, -1);
++    lv_obj_move_to_index(toast, -1);
++}
++
++void HopticsUI::closeReport(void)
++{
++    if (repOv)
++        lv_obj_add_flag(repOv, LV_OBJ_FLAG_HIDDEN);
++    if (repCrash)
++        hoptics::Report::get().ackFresh();
++    repCrash = false;
++}
++
++void HopticsUI::showCrashReportIfAny(void)
++{
++    if (crashShown || !repOv || !hoptics::Report::get().freshCrash())
++        return;
++    if (wizOv && !lv_obj_has_flag(wizOv, LV_OBJ_FLAG_HIDDEN))
++        return; // first-time setup comes first; the crash stays under Settings > DEVICE
++    crashShown = true;
++    openReport(true);
++}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..9d1264d
+index 0000000..f6700eb
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,661 @@
+@@ -0,0 +1,664 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsView.h"
++#include "graphics/view/TFT/HopticsReport.h"
 +#include "graphics/common/LoRaPresets.h"
 +#include "graphics/common/Ringtones.h"
 +#if defined(ARDUINO_ARCH_ESP32)
@@ -6931,6 +7595,7 @@ index 0000000..9d1264d
 +void HopticsView::init(IClientBase *client)
 +{
 +    ILOG_INFO("Hoptics MT " HOPTICS_VERSION " init");
++    hoptics::Report::get().begin(); // why did we restart? (reads the crash summary once)
 +    MeshtasticView::init(client);
 +    wireCallbacks();
 +    ui.createBootScreen(firmware_version);
@@ -6958,6 +7623,7 @@ index 0000000..9d1264d
 +    if (now != lastTick) {
 +        lastTick = now;
 +        ui.tick((uint32_t)now);
++        hoptics::Report::get().tick();
 +    }
 +    ui.service(); // street map tiles finished by the background worker
 +
