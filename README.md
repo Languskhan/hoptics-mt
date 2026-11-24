@@ -24,7 +24,11 @@ is upstream Meshtastic 2.8.3, unchanged.
   graph, radio summary (region, preset, frequency, hop limit, power) and last-heard list.
 - **Live**: every packet as it's heard, like a DMR hotspot last-heard list: who, packet type, direct
   or how many hops, RSSI/SNR. Filter All / RF only / **MQTT only** (MQTT rows have a violet edge).
-- **Map**: a tile-free radar map. Nodes that share GPS are plotted around you with range rings. Direct
+- **Map**: nodes that share GPS are plotted around you on an OpenStreetMap street map (themed to match:
+  dark, daylight, night-red, amber), with range rings. Drag to look around, Fit to come back. Tiles
+  download over Wi-Fi only for what you are looking at (OSM's tile policy forbids prefetching), are
+  checked against pinned root CAs, and are saved on flash (up to 1.5 MB, always leaving 1 MB free) so
+  viewed areas still show without Wi-Fi. Settings > MAP turns it off or clears the saved tiles. Direct
   neighbours get a link line coloured by SNR, and **every packet makes its sender ping**, so you can
   watch where traffic comes from. RF pings are coloured by packet type, MQTT pings are violet, and a
   direct packet flashes a beam to you. Tap a dot for that node.
