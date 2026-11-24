@@ -1,9 +1,9 @@
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..69f1867
+index 0000000..245aa26
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,457 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -155,6 +155,10 @@ index 0000000..69f1867
 +        std::function<void(int region)> setRegion;
 +        std::function<void(int preset)> setPreset;
 +        std::function<void(bool on)> setBluetooth;
++        // Wi-Fi from the screen; psk == nullptr keeps the saved password. The radio restarts to apply it.
++        std::function<void(bool on, const char *ssid, const char *psk)> setWifi;
++        // front-end LNA on boards that have one: meshtastic_Config_LoRaConfig_FEM_LNA_Mode value
++        std::function<void(int mode)> setLnaMode;
 +        // phone app mode: Bluetooth on for the Meshtastic app; the firmware stops feeding the screen
 +        std::function<void(void)> enterPhoneMode;
 +        std::function<void(void)> leavePhoneMode;
@@ -197,6 +201,8 @@ index 0000000..69f1867
 +                  int8_t txPower, float freqMHz);
 +    void setDeviceRole(int role);
 +    void setBluetoothEnabled(bool on, uint32_t fixedPin = 0);
++    void setWifiConfig(const char *ssid, bool hasPassword);
++    void setLnaMode(int mode); // FEM_LNA_Mode: 0 off, 1 on, 2 not present, 3 auto
 +    // full-screen "phone app mode" page (Bluetooth on, screen paused); restarting = on the way in or out
 +    void showPhoneMode(uint32_t pin, bool restarting);
 +    bool inPhoneMode(void) const { return phoneScreen != nullptr; }
@@ -352,6 +358,10 @@ index 0000000..69f1867
 +    // ---------- widgets ----------
 +    lv_obj_t *bootScreen = nullptr, *bootStatus = nullptr;
 +    lv_obj_t *phoneScreen = nullptr, *phoneMsg = nullptr, *phonePin = nullptr, *phoneBtn = nullptr;
++    lv_obj_t *setWifiSw = nullptr, *setSsid = nullptr, *setPsk = nullptr, *setLnaDd = nullptr, *setLnaRow = nullptr;
++    char wifiSsid[33] = {0};
++    bool wifiHasPsk = false;
++    int lnaMode = 2; // not present until the radio says otherwise
 +    lv_obj_t *mainScreen = nullptr;
 +    lv_obj_t *statusTime = nullptr, *statusName = nullptr, *statusBatt = nullptr, *statusMsg = nullptr, *statusLink = nullptr,
 +             *statusMqtt = nullptr, *statusBt = nullptr;
@@ -592,10 +602,10 @@ index 71cbee1..a0f7440 100644
  #define LV_USE_CHECKBOX 1
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..1ee2c43
+index 0000000..8bb0d9d
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,4074 @@
+@@ -0,0 +1,4197 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3214,6 +3224,29 @@ index 0000000..1ee2c43
 +    lv_obj_set_width(setRoleDd, LV_PCT(100));
 +    lv_dropdown_set_options(setRoleDd, optString(ROLES).c_str());
 +    styleDropdown(setRoleDd);
++    setLnaRow = settingsRow(cr, "Receive LNA (front-end amplifier)");
++    setLnaDd = lv_dropdown_create(setLnaRow);
++    lv_obj_set_width(setLnaDd, LV_PCT(100));
++    lv_dropdown_set_options(setLnaDd, "Auto (recommended)\nOn\nOff (bypass)");
++    styleDropdown(setLnaDd);
++    lv_obj_add_event_cb(
++        setLnaDd,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            static const int MODES[3] = {3, 1, 0}; // Auto, On, Off -> FEM_LNA_Mode
++            static const char *NAMES[3] = {"Auto", "On", "Off (bypass)"};
++            uint32_t i = lv_dropdown_get_selected(ui->setLnaDd);
++            if (i < 3 && MODES[i] != ui->lnaMode && ui->cbs.setLnaMode) {
++                ui->cbs.setLnaMode(MODES[i]);
++                ui->lnaMode = MODES[i];
++                char t[48];
++                snprintf(t, sizeof(t), LV_SYMBOL_OK " LNA: %s - applied", NAMES[i]);
++                ui->showToast(t);
++            }
++        },
++        LV_EVENT_VALUE_CHANGED, this);
 +    lv_obj_add_event_cb(
 +        setRegionDd,
 +        [](lv_event_t *e) {
@@ -3253,6 +3286,82 @@ index 0000000..1ee2c43
 +            }
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
++
++    // wi-fi
++    lv_obj_t *cwf = card(body, "WI-FI");
++    lv_obj_t *wfr = plain(cwf);
++    lv_obj_set_size(wfr, LV_PCT(100), 30);
++    row(wfr, 6);
++    lv_obj_t *wfl = label(wfr, &F14, C_TEXT, LV_SYMBOL_WIFI " Wi-Fi");
++    lv_obj_set_flex_grow(wfl, 1);
++    oneLine(wfl);
++    setWifiSw = lv_switch_create(wfr);
++    lv_obj_set_style_bg_color(setWifiSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    r = settingsRow(cwf, "Network name");
++    setSsid = lv_textarea_create(r);
++    lv_textarea_set_one_line(setSsid, true);
++    lv_textarea_set_max_length(setSsid, 32);
++    lv_obj_set_width(setSsid, LV_PCT(100));
++    styleTextarea(setSsid);
++    r = settingsRow(cwf, "Password");
++    setPsk = lv_textarea_create(r);
++    lv_textarea_set_one_line(setPsk, true);
++    lv_textarea_set_max_length(setPsk, 64);
++    lv_textarea_set_password_mode(setPsk, true);
++    lv_obj_set_width(setPsk, LV_PCT(100));
++    styleTextarea(setPsk);
++    for (lv_obj_t *ta : {setSsid, setPsk}) {
++        lv_obj_add_event_cb(
++            ta,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                ui->showKeyboard((lv_obj_t *)lv_event_get_current_target(e));
++            },
++            LV_EVENT_CLICKED, this);
++        lv_obj_add_event_cb(
++            ta, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->hideKeyboard(); }, LV_EVENT_READY, this);
++    }
++    lv_obj_t *wsave = flatButton(cwf, LV_SYMBOL_SAVE " Save & restart", C_CYAN, LV_PCT(100), 34);
++    // two-tap confirm, like Reboot: saving restarts the radio
++    lv_obj_add_event_cb(
++        wsave,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
++            ui->hideKeyboard();
++            bool on = lv_obj_has_state(ui->setWifiSw, LV_STATE_CHECKED);
++            const char *ssid = lv_textarea_get_text(ui->setSsid);
++            const char *psk = lv_textarea_get_text(ui->setPsk);
++            if (on && !ssid[0]) {
++                ui->showToast(LV_SYMBOL_WARNING " Enter the network name");
++                return;
++            }
++            if (!lv_obj_has_state(b, LV_STATE_USER_1)) {
++                lv_obj_add_state(b, LV_STATE_USER_1);
++                setButtonText(b, "Tap again to restart");
++                lv_timer_t *t = lv_timer_create(
++                    [](lv_timer_t *t) {
++                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
++                        lv_obj_remove_state(btn, LV_STATE_USER_1);
++                        setButtonText(btn, LV_SYMBOL_SAVE " Save & restart");
++                    },
++                    3000, b);
++                lv_timer_set_repeat_count(t, 1);
++                return;
++            }
++            // blank password + same network = keep the saved one
++            bool keep = !psk[0] && ui->wifiHasPsk && strcmp(ssid, ui->wifiSsid) == 0;
++            if (ui->cbs.setWifi)
++                ui->cbs.setWifi(on, ssid, keep ? nullptr : psk);
++            setButtonText(b, "Restarting...");
++            ui->showToast(on ? LV_SYMBOL_WIFI " Wi-Fi saved - restarting" : LV_SYMBOL_WIFI " Wi-Fi off - restarting", 6000);
++        },
++        LV_EVENT_CLICKED, this);
++    lv_obj_t *wfh = label(cwf, FSMALL, C_DIM,
++                          "2.4 GHz networks only. Wi-Fi turns Bluetooth off on this radio. Needed for MQTT and the web "
++                          "page. Leave the password blank to keep the saved one.");
++    lv_obj_set_width(wfh, LV_PCT(100));
++    lv_label_set_long_mode(wfh, LV_LABEL_LONG_MODE_WRAP);
 +
 +    // phone app
 +    lv_obj_t *cp = card(body, "PHONE APP");
@@ -3405,6 +3514,19 @@ index 0000000..1ee2c43
 +        lv_label_set_text_fmt(setBtPin, LV_SYMBOL_BLUETOOTH "  PIN  %06u", (unsigned)btPin);
 +    else
 +        lv_label_set_text(setBtPin, bluetoothOn ? LV_SYMBOL_BLUETOOTH "  PIN: random (set on pairing)" : "Bluetooth is off");
++    if (wifiOn)
++        lv_obj_add_state(setWifiSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setWifiSw, LV_STATE_CHECKED);
++    lv_textarea_set_text(setSsid, wifiSsid);
++    lv_textarea_set_text(setPsk, "");
++    lv_textarea_set_placeholder_text(setPsk, wifiHasPsk ? "saved - blank keeps it" : "network password");
++    if (lnaMode == 2) {
++        lv_obj_add_flag(setLnaRow, LV_OBJ_FLAG_HIDDEN); // no controllable LNA on this board
++    } else {
++        lv_obj_remove_flag(setLnaRow, LV_OBJ_FLAG_HIDDEN);
++        lv_dropdown_set_selected(setLnaDd, lnaMode == 3 ? 0 : (lnaMode == 1 ? 1 : 2));
++    }
 +    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
 +    lv_dropdown_set_selected(setPresetDd, optIndex(PRESETS, preset));
 +    lv_dropdown_set_selected(setRoleDd, optIndex(ROLES, role));
@@ -3814,6 +3936,17 @@ index 0000000..1ee2c43
 +{
 +    role = r;
 +}
++void HopticsUI::setWifiConfig(const char *ssid, bool hasPassword)
++{
++    snprintf(wifiSsid, sizeof(wifiSsid), "%s", ssid ? ssid : "");
++    wifiHasPsk = hasPassword;
++}
++
++void HopticsUI::setLnaMode(int mode)
++{
++    lnaMode = mode;
++}
++
 +void HopticsUI::setBluetoothEnabled(bool on, uint32_t fixedPin)
 +{
 +    bluetoothOn = on;
@@ -4672,10 +4805,10 @@ index 0000000..1ee2c43
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..db7d40b
+index 0000000..8e08700
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,561 @@
+@@ -0,0 +1,586 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -4960,6 +5093,29 @@ index 0000000..db7d40b
 +        state = eWaitingForReboot;
 +        armRebootFallback();
 +    };
++    cb.setWifi = [this](bool on, const char *ssid, const char *psk) {
++        meshtastic_Config_NetworkConfig n = network;
++        n.wifi_enabled = on;
++        if (ssid) {
++            strncpy(n.wifi_ssid, ssid, sizeof(n.wifi_ssid) - 1);
++            n.wifi_ssid[sizeof(n.wifi_ssid) - 1] = 0;
++        }
++        // "sekrit" is the firmware's keep-the-saved-secret marker (AdminModule writeSecret)
++        strncpy(n.wifi_psk, psk ? psk : "sekrit", sizeof(n.wifi_psk) - 1);
++        n.wifi_psk[sizeof(n.wifi_psk) - 1] = 0;
++        network = n;
++        controller->sendConfig(meshtastic_Config_NetworkConfig{n}, ownNode); // network changes restart the radio
++        armRebootFallback();
++    };
++    cb.setLnaMode = [this](int m) {
++        if (!haveLora)
++            return;
++        meshtastic_Config_LoRaConfig l = lora;
++        l.fem_lna_mode = (meshtastic_Config_LoRaConfig_FEM_LNA_Mode)m;
++        lora = l;
++        controller->sendConfig(meshtastic_Config_LoRaConfig{l}, ownNode); // applied live, no restart
++        controller->requestLoRaConfig(ownNode); // read back: boards without LNA control report "not present"
++    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
 +    ui.setCallbacks(cb);
@@ -5059,6 +5215,7 @@ index 0000000..db7d40b
 +{
 +    lora = cfg;
 +    haveLora = true;
++    ui.setLnaMode((int)cfg.fem_lna_mode);
 +    pushRadioInfo();
 +}
 +
@@ -5114,6 +5271,7 @@ index 0000000..db7d40b
 +    network = cfg;
 +    haveNetwork = true;
 +    ui.setNetwork(cfg.wifi_enabled, false, 0, false, 0);
++    ui.setWifiConfig(cfg.wifi_ssid, cfg.wifi_psk[0] != 0);
 +}
 +
 +uint8_t HopticsView::nodeChannel(uint32_t num) const
