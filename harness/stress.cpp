@@ -58,7 +58,7 @@ int main(int argc, char **argv)
     const uint32_t me = 0xa1b2c3d4;
     ui.setMyNode(me);
     ui.upsertNode(me, 0, now, "HOPT", "Hoptics Stress", 0, true, false, 110);
-    ui.updatePosition(me, 386900000, -1212700000, 70);
+    ui.updatePosition(me, 397950000, -896550000, 70);
     for (int c = 0; c < 8; c++)
         ui.setChannel(c, c == 0 ? "" : ("Ch" + std::to_string(c)).c_str(), c < 4);
     ui.setRadio(1, "US", 0, "LongFast", true, 3, 27, 906.875f);
@@ -79,7 +79,7 @@ int main(int argc, char **argv)
         std::string lns = (i % 9 == 0) ? std::string(hostile[(i / 9) % 8]) : "Node " + std::to_string(i);
         ui.upsertNode(id, i % 4, now - rnd(86400 * 3), sn, lns.c_str(), (uint8_t)rnd(13), i % 3 == 0, i % 11 == 0, 0);
         if (i % 2)
-            ui.updatePosition(id, 386900000 + (int32_t)rnd(4000000) - 2000000, -1212700000 + (int32_t)rnd(5000000) - 2500000,
+            ui.updatePosition(id, 397950000 + (int32_t)rnd(4000000) - 2000000, -896550000 + (int32_t)rnd(5000000) - 2500000,
                               (int32_t)rnd(800));
     }
 
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
         if (s % 900 == 0 && s) // theme switch every 15 min
             ui.setTheme((ui.theme() + 1) % HopticsUI::TH_COUNT);
         if (s % 300 == 0) // we move around: city pop-ups
-            ui.updatePosition(me, 386900000 + (int32_t)rnd(400000), -1212700000 + (int32_t)rnd(400000), 70);
+            ui.updatePosition(me, 397950000 + (int32_t)rnd(400000), -896550000 + (int32_t)rnd(400000), 70);
 
         auto t0 = clk::now();
         ui.tick(now);

@@ -1,9 +1,9 @@
 diff --git a/include/graphics/view/TFT/HopticsBoard.h b/include/graphics/view/TFT/HopticsBoard.h
 new file mode 100644
-index 0000000..2d1801f
+index 0000000..1eff63a
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsBoard.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,49 @@
 +#pragma once
 +/**
 + * Hoptics MT - board facts the UI cannot find out at run time. GPL-3.0, same as device-ui.
@@ -40,6 +40,15 @@ index 0000000..2d1801f
 +constexpr bool kSensorSlots = false;
 +#else
 +constexpr bool kSensorSlots = true;
++#endif
++
++// The board has a GPS receiver, so Settings offers the GPS switch even when the stored config says "not
++// present" (a node updated from a stock build without erasing keeps that). Elsewhere the switch only
++// shows when the radio reports a GPS mode other than "not present".
++#if defined(T_DECK_PLUS) || defined(ELECROW_ThinkNode_M9) || defined(HELTEC_V4_R8)
++constexpr bool kGps = true;
++#else
++constexpr bool kGps = false;
 +#endif
 +
 +} // namespace board
@@ -632,14 +641,15 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..7540c29
+index 0000000..f622797
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,618 @@
 +#pragma once
 +/**
-+ * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
-+ * (Heltec V4 Expansion Kit, Heltec V4-R8 Expansion Kit V2).
++ * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
++ * (Heltec V4 Expansion Kit, Heltec V4-R8 Expansion Kit V2) and 320x240 landscape keyboard devices
++ * (LilyGO T-Deck Plus, Elecrow ThinkNode M9). The layout follows the display size at runtime.
 + *
 + * This file is pure LVGL + C++ STL. It knows nothing about protobufs or the
 + * Meshtastic client plumbing; HopticsView adapts the device-ui MeshtasticView
@@ -824,6 +834,11 @@ index 0000000..7540c29
 +        std::function<void(bool on)> setWebChat;
 +        // environment sensors: share = send readings to the mesh every intervalSecs (the radio restarts)
 +        std::function<void(bool share, uint32_t intervalSecs)> setEnvSharing;
++        // GPS receiver on / off (Config.PositionConfig.gps_mode; the radio restarts)
++        std::function<void(bool on)> setGps;
++        // what the arrow keys should do now (KeyContext), for keyboard drivers that turn UP/DOWN into
++        // "next/previous control" unless told otherwise (the ThinkNode M9's input policy)
++        std::function<void(int context)> setKeyContext;
 +    };
 +
 +    enum Theme { TH_MIDNIGHT = 0, TH_DAYLIGHT, TH_NIGHT_RED, TH_AMBER, TH_COUNT };
@@ -863,6 +878,7 @@ index 0000000..7540c29
 +    void setBluetoothEnabled(bool on, uint32_t fixedPin = 0);
 +    void setWifiConfig(const char *ssid, bool hasPassword);
 +    void setLnaMode(int mode); // FEM_LNA_Mode: 0 off, 1 on, 2 not present, 3 auto
++    void setGpsMode(int mode); // PositionConfig.GpsMode: 0 disabled, 1 enabled, 2 not present
 +    // message sounds offered in Settings (picked from device-ui's Meshtastic tone library)
 +    static constexpr int kToneCount = 8;
 +    static const char *toneName(int i);        // shown on screen
@@ -885,7 +901,7 @@ index 0000000..7540c29
 +    void showToast(const char *text, uint32_t ms = 2500);
 +    void maybeShowWizard(void);
 +    bool hasCityData(void) const;
-+    // "Orangevale, CA" / "near Folsom, CA - 6 km NE"; false if no position or no city data
++    // "Springfield, IL" / "near Springfield, IL - 6 km NE"; false if no position or no city data
 +    bool cityLabel(uint32_t num, char *buf, size_t len);
 +
 +    uint32_t myNodeNum(void) const { return myNode; }
@@ -901,6 +917,17 @@ index 0000000..7540c29
 +    void openReport(bool forCrash);
 +    void closeReport(void);
 +    void showCrashReportIfAny(void); // after a crash restart: shows the report once
++
++    // --- keyboard and trackball (key map: "KEYS" in HopticsUI.cpp) ---
++    // When the board has a keypad or encoder input device (T-Deck Plus keyboard and trackball, ThinkNode
++    // M9 keyboard), Hoptics drives LVGL's default focus group: it adopts lv_group_get_default() (creating
++    // it if the input drivers have not), attaches every keypad/encoder indev to it, and keeps it holding
++    // only the controls of whatever is on top. Touch-only boards are left as they were.
++    enum KeyContext { KC_NAVIGATE, KC_SCROLL, KC_MAP, KC_LIST_OPEN };
++    enum KeyCommand { KEY_HOME, KEY_CHATS, KEY_MAP, KEY_COMPOSE, KEY_BACK };
++    void keyCommand(KeyCommand c);  // dedicated keys (M9: Home, Chat, Map, Preset, Back)
++    void inputDevicesChanged(void); // after adding a keypad/encoder indev (also noticed by tick() within a second)
++    bool keyNavigation(void) const { return keysOn; }
 +
 +  private:
 +    // ---------- screens ----------
@@ -996,11 +1023,30 @@ index 0000000..7540c29
 +    double distanceKm(const Node &a, const Node &b) const;
 +
 +    lv_obj_t *card(lv_obj_t *parent, const char *title, lv_obj_t **titleLabel = nullptr);
-+    lv_obj_t *statTile(lv_obj_t *parent, const char *caption, lv_color_t accent, lv_obj_t **value, lv_obj_t **sub);
++    lv_obj_t *statTile(lv_obj_t *parent, const char *caption, lv_color_t accent, lv_obj_t **value, lv_obj_t **sub,
++                       const char *shortCaption = nullptr);
 +    lv_obj_t *makeChart(lv_obj_t *parent, int32_t h, lv_chart_type_t type, uint32_t points);
 +    lv_obj_t *overlayPanel(const char *title, lv_obj_t **titleLabel, lv_event_cb_t backCb);
 +    lv_obj_t *settingsRow(lv_obj_t *parent, const char *label);
 +    lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color, const char *text = "");
++
++    // ---------- keys ----------
++    void keysInit(void);
++    void attachKeyInputs(void);
++    bool hasKeypad(void) const;
++    void stop(lv_obj_t *o); // a focus stop: keys can reach it
++    void wireStop(lv_obj_t *o);
++    void keyScope(lv_obj_t *prefer = nullptr); // the focus group = controls of whatever is on top
++    void keyFocus(lv_obj_t *o, bool ring);
++    void keyNext(void);                        // after Enter in a text field: on to the next control
++    lv_obj_t *topOverlay(void) const;
++    void onKey(lv_event_t *e);
++    void goBack(void);
++    void stepTab(int dir);
++    void updateKeyContext(void);
++    void mapZoom(int dir); // +1 in, -1 out, 0 fit
++    void setMapPan(bool on);
++    void mapPanKey(uint32_t key, bool encoder);
 +
 +    // ---------- model ----------
 +    Callbacks cbs;
@@ -1078,19 +1124,21 @@ index 0000000..7540c29
 +    lv_obj_t *setToneDd = nullptr;
 +    int toneIdx = 1;
 +    lv_obj_t *repOv = nullptr, *repTitle = nullptr, *repBanner = nullptr, *repBannerText = nullptr, *repQr = nullptr,
-+             *repText = nullptr, *repClearBtn = nullptr;
++             *repText = nullptr, *repClearBtn = nullptr, *repScroll = nullptr;
 +    bool repCrash = false, crashShown = false;
 +    lv_obj_t *setWifiSw = nullptr, *setSsid = nullptr, *setPsk = nullptr, *setLnaDd = nullptr, *setLnaRow = nullptr;
 +    char wifiSsid[33] = {0};
 +    bool wifiHasPsk = false;
 +    int lnaMode = 2; // not present until the radio says otherwise
++    lv_obj_t *setGpsRow = nullptr, *setGpsSw = nullptr;
++    int gpsMode = -1; // not reported yet: no GPS switch
 +    lv_obj_t *mainScreen = nullptr;
 +    lv_obj_t *statusTime = nullptr, *statusName = nullptr, *statusBatt = nullptr, *statusMsg = nullptr, *statusLink = nullptr,
 +             *statusMqtt = nullptr, *statusBt = nullptr;
 +    lv_obj_t *content = nullptr;
 +    lv_obj_t *pages[T_COUNT] = {nullptr};
 +    lv_obj_t *navBtns[T_COUNT] = {nullptr};
-+    lv_obj_t *navBadge = nullptr;
++    lv_obj_t *navBar = nullptr, *navBadge = nullptr;
 +    Tab activeTab = T_HOME;
 +
 +    // home
@@ -1196,6 +1244,19 @@ index 0000000..7540c29
 +    bool wizardShown = false;
 +    bool regionKnown = false;
 +
++    // keys
++    lv_group_t *keyGroup = nullptr;
++    bool keysOn = false;    // a keypad or encoder is attached: the focus group is managed
++    bool touchInput = true; // a touch screen too ("Tap" or "Press" in hints)
++    bool mapPan = false;    // map focused and taking the arrow keys / trackball
++    bool keyActive = false; // keys were used last (not touch): programmatic focus keeps the ring
++    std::vector<lv_indev_t *> touchHooked;
++    int keyCtx = -1;
++    lv_obj_t *scopeRoot = nullptr, *statusGear = nullptr;
++    std::vector<lv_obj_t *> scopeStops;
++    std::vector<std::pair<lv_obj_t *, lv_obj_t *>> focusMemo; // scope -> control focused when it was left
++    uint32_t chatFocusKey = UINT32_MAX, envFocusNode = 0;    // focus to restore in rebuilt lists
++
 +    // shared
 +    lv_obj_t *keyboard = nullptr;
 +    lv_obj_t *kbTarget = nullptr;
@@ -1204,10 +1265,10 @@ index 0000000..7540c29
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..997a864
+index 0000000..46c8d9b
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,101 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1248,6 +1309,7 @@ index 0000000..997a864
 +    void updateChannelConfig(const meshtastic_Channel &ch) override;
 +    void updateDeviceConfig(const meshtastic_Config_DeviceConfig &cfg) override;
 +    void updateLoRaConfig(const meshtastic_Config_LoRaConfig &cfg) override;
++    void updatePositionConfig(const meshtastic_Config_PositionConfig &cfg) override;
 +    void updateBluetoothConfig(const meshtastic_Config_BluetoothConfig &cfg, uint32_t id = 0) override;
 +    void updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg) override;
 +    void updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg) override;
@@ -1289,9 +1351,10 @@ index 0000000..997a864
 +    meshtastic_Config_DeviceConfig device{};
 +    meshtastic_Config_BluetoothConfig bluetooth{};
 +    meshtastic_Config_NetworkConfig network{};
++    meshtastic_Config_PositionConfig position{};
 +    meshtastic_User myUser{};
 +    char channel0Name[12] = "";
-+    bool haveLora = false, haveDevice = false, haveBt = false, haveNetwork = false;
++    bool haveLora = false, haveDevice = false, haveBt = false, haveNetwork = false, havePosition = false;
 +    bool mainShown = false;
 +    uint32_t bootStart = 0;
 +    uint32_t nodeCountSeen = 0;
@@ -3098,15 +3161,16 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..d18a80e
+index 0000000..dcfc631
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,5681 @@
+@@ -0,0 +1,6644 @@
 +/**
-+ * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
++ * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsUI.h"
++#include "graphics/view/TFT/HopticsBoard.h"
 +#include "graphics/view/TFT/HopticsReport.h"
 +#include <algorithm>
 +#include <cmath>
@@ -3196,6 +3260,29 @@ index 0000000..d18a80e
 +    }
 +}
 +
++// Keyboard focus ring (see KEYS), in LV_STATE_FOCUS_KEY only: the theme's text colour, so it never reads as
++// the accent that marks selected things (tabs, chips, the picked theme); amber while editing (green in the
++// amber theme). Drawn just inside the control (most sit in rows that clip anything outside them); a
++// switch gets it tight outside, a slider around its knob.
++lv_style_t ST_FOCUS, ST_EDIT, ST_FOCUS_OUT, ST_EDIT_OUT;
++bool focusStylesReady = false;
++void applyFocusStyles(void)
++{
++    lv_style_t *all[] = {&ST_FOCUS, &ST_EDIT, &ST_FOCUS_OUT, &ST_EDIT_OUT};
++    if (!focusStylesReady) {
++        for (lv_style_t *st : all)
++            lv_style_init(st);
++        focusStylesReady = true;
++    }
++    for (lv_style_t *st : all) {
++        lv_style_set_outline_width(st, 2);
++        lv_style_set_outline_opa(st, LV_OPA_COVER);
++        lv_style_set_outline_color(st, (st == &ST_EDIT || st == &ST_EDIT_OUT) ? (T_IDX == 3 ? C_GREEN : C_AMBER) : C_TEXT);
++        lv_style_set_outline_pad(st, (st == &ST_FOCUS_OUT || st == &ST_EDIT_OUT) ? 0 : -3);
++        lv_obj_report_style_change(st);
++    }
++}
++
 +// one-line label that ends with "..." instead of wrapping
 +void oneLine(lv_obj_t *l)
 +{
@@ -3237,6 +3324,86 @@ index 0000000..d18a80e
 +constexpr int32_t STATUS_H = 24;
 +constexpr int32_t NAV_H = 44;
 +constexpr int32_t PAD = 6;
++
++// Layout. Portrait panels (240x320: the Heltec kits) keep the original design with the tab bar at the
++// bottom. Landscape panels (320x240: T-Deck Plus, ThinkNode M9) are short, so the tabs move to a rail
++// on the left, pages keep the full height, and a few screens go side by side. Set from the display size
++// each time a screen is built, so one firmware works either way round.
++bool LAND = false;
++int32_t RAIL_W = 0; // landscape tab rail
++int32_t HDR_H = 36; // overlay header with the back button
++void applyLayout(void)
++{
++    LAND = W() > H();
++    RAIL_W = LAND ? 48 : 0;
++    HDR_H = LAND ? 32 : 36;
++}
++// width of the tab pages: the screen minus the rail
++int32_t PW(void)
++{
++    return W() - RAIL_W;
++}
++// a control next to its label in a landscape settings row, under it in portrait
++void ctlWidth(lv_obj_t *o)
++{
++    lv_obj_set_width(o, LAND ? LV_PCT(64) : LV_PCT(100));
++}
++
++// While Hoptics manages the focus group (keys present) it adds controls itself: LVGL would otherwise put
++// every new button, list and text field into the default group as it is built, and focus the first one.
++struct NoAutoGroup {
++    lv_group_t *saved;
++    explicit NoAutoGroup(bool on) : saved(on ? lv_group_get_default() : nullptr)
++    {
++        if (saved)
++            lv_group_set_default(nullptr);
++    }
++    ~NoAutoGroup()
++    {
++        if (saved)
++            lv_group_set_default(saved);
++    }
++};
++
++// object flags used for the focus bookkeeping
++constexpr lv_obj_flag_t F_STOP = LV_OBJ_FLAG_USER_1;  // a focus stop
++constexpr lv_obj_flag_t F_WIRED = LV_OBJ_FLAG_USER_3; // key handler and ring style attached
++constexpr lv_obj_flag_t F_LAST = LV_OBJ_FLAG_USER_4;  // reached last (e.g. the wizard's Skip, after Next)
++
++bool isKeyIndev(lv_indev_t *in)
++{
++    if (!in)
++        return false;
++    const lv_indev_type_t t = lv_indev_get_type(in);
++    return t == LV_INDEV_TYPE_KEYPAD || t == LV_INDEV_TYPE_ENCODER;
++}
++
++bool anyIndev(lv_indev_type_t type)
++{
++    for (lv_indev_t *in = lv_indev_get_next(nullptr); in; in = lv_indev_get_next(in))
++        if (lv_indev_get_type(in) == type)
++            return true;
++    return false;
++}
++
++bool shown(lv_obj_t *o)
++{
++    for (; o; o = lv_obj_get_parent(o))
++        if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN))
++            return false;
++    return true;
++}
++
++void collectStops(lv_obj_t *o, std::vector<lv_obj_t *> &out, std::vector<lv_obj_t *> &last)
++{
++    if (!o)
++        return;
++    if (lv_obj_has_flag(o, F_STOP))
++        (lv_obj_has_flag(o, F_LAST) ? last : out).push_back(o);
++    const uint32_t n = lv_obj_get_child_count(o);
++    for (uint32_t i = 0; i < n; i++)
++        collectStops(lv_obj_get_child(o, i), out, last);
++}
 +
 +lv_obj_t *plain(lv_obj_t *parent)
 +{
@@ -3309,13 +3476,15 @@ index 0000000..d18a80e
 +    lv_obj_set_style_text_font(dd, &F14, 0);
 +    lv_obj_set_style_radius(dd, 8, 0);
 +    lv_obj_set_style_pad_ver(dd, 6, 0);
++    if (LAND)
++        lv_obj_set_style_pad_hor(dd, 8, 0); // beside its label: room for the longer option names
 +    lv_obj_t *list = lv_dropdown_get_list(dd);
 +    lv_obj_set_style_bg_color(list, C_CARD2, 0);
 +    lv_obj_set_style_text_color(list, C_TEXT, 0);
 +    lv_obj_set_style_text_font(list, &F14, 0);
 +    lv_obj_set_style_border_color(list, C_CYAN, 0);
 +    lv_obj_set_style_bg_color(list, C_ME, (lv_style_selector_t)LV_PART_SELECTED | LV_STATE_CHECKED);
-+    lv_obj_set_style_max_height(list, 180, 0);
++    lv_obj_set_style_max_height(list, LAND ? 150 : 180, 0);
 +}
 +
 +void styleTextarea(lv_obj_t *ta)
@@ -3612,9 +3781,27 @@ index 0000000..d18a80e
 +    return c;
 +}
 +
-+lv_obj_t *HopticsUI::statTile(lv_obj_t *parent, const char *caption, lv_color_t accent, lv_obj_t **value, lv_obj_t **sub)
++lv_obj_t *HopticsUI::statTile(lv_obj_t *parent, const char *caption, lv_color_t accent, lv_obj_t **value, lv_obj_t **sub,
++                               const char *shortCaption)
 +{
 +    lv_obj_t *t = plain(parent);
++    if (LAND) {
++        // landscape: four narrow tiles in one row, caption / value / note stacked
++        lv_obj_set_size(t, (PW() - 2 * PAD - 3 * PAD) / 4, 56);
++        lv_obj_set_style_bg_color(t, C_CARD, 0);
++        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
++        lv_obj_set_style_radius(t, 10, 0);
++        lv_obj_set_style_border_side(t, T_BORDERS ? LV_BORDER_SIDE_FULL : LV_BORDER_SIDE_LEFT, 0);
++        lv_obj_set_style_border_width(t, T_BORDERS ? 2 : 3, 0);
++        lv_obj_set_style_border_color(t, accent, 0);
++        lv_obj_t *c = label(t, FSMALL, C_MUTED, shortCaption ? shortCaption : caption);
++        lv_obj_set_pos(c, 8, 4);
++        *value = label(t, &F20, accent, "--");
++        lv_obj_set_pos(*value, 8, 16);
++        *sub = label(t, FSMALL, C_MUTED, "");
++        lv_obj_set_pos(*sub, 8, 39);
++        return t;
++    }
 +    lv_obj_set_size(t, (W() - 2 * PAD - PAD) / 2, 58);
 +    lv_obj_set_style_bg_color(t, C_CARD, 0);
 +    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
@@ -3667,7 +3854,7 @@ index 0000000..d18a80e
 +    lv_obj_add_flag(ov, LV_OBJ_FLAG_HIDDEN);
 +
 +    lv_obj_t *hdr = plain(ov);
-+    lv_obj_set_size(hdr, LV_PCT(100), 36);
++    lv_obj_set_size(hdr, LV_PCT(100), HDR_H);
 +    lv_obj_set_style_bg_color(hdr, C_BAR, 0);
 +    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
 +    lv_obj_set_style_border_side(hdr, LV_BORDER_SIDE_BOTTOM, 0);
@@ -3678,7 +3865,7 @@ index 0000000..d18a80e
 +
 +    lv_obj_t *back = lv_button_create(hdr);
 +    lv_obj_remove_style_all(back);
-+    lv_obj_set_size(back, 40, 34);
++    lv_obj_set_size(back, 40, HDR_H - 2);
 +    lv_obj_set_style_bg_color(back, C_CYAN, LV_STATE_PRESSED);
 +    lv_obj_set_style_bg_opa(back, LV_OPA_20, LV_STATE_PRESSED);
 +    lv_obj_set_style_radius(back, 8, 0);
@@ -3686,6 +3873,7 @@ index 0000000..d18a80e
 +    lv_obj_center(bl);
 +    lv_obj_add_event_cb(back, backCb, LV_EVENT_CLICKED, this);
 +    lv_obj_set_ext_click_area(back, 6);
++    stop(back);
 +
 +    lv_obj_t *t = label(hdr, &F16, C_TEXT, title);
 +    oneLine(t);
@@ -3699,6 +3887,17 @@ index 0000000..d18a80e
 +{
 +    lv_obj_t *r = plain(parent);
 +    lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
++    if (LAND) {
++        // label on the left, control (ctlWidth) on the right; anything after them wraps to a full-width line
++        lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW_WRAP);
++        lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++        lv_obj_set_style_pad_column(r, 6, 0);
++        lv_obj_set_style_pad_row(r, 4, 0);
++        lv_obj_t *l = label(r, &F12, C_MUTED, text);
++        lv_obj_set_width(l, LV_PCT(30));
++        lv_obj_set_flex_grow(l, 1);
++        return r;
++    }
 +    column(r, 4);
 +    label(r, &F12, C_MUTED, text);
 +    return r;
@@ -4024,6 +4223,8 @@ index 0000000..d18a80e
 +{
 +    initFonts();
 +    applyPalette(themeIdx);
++    applyLayout();
++    keysInit();
 +    snprintf(fwVersion, sizeof(fwVersion), "%s", firmwareVersion ? firmwareVersion : "");
 +    bootScreen = lv_obj_create(NULL);
 +    lv_obj_remove_flag(bootScreen, LV_OBJ_FLAG_SCROLLABLE);
@@ -4050,9 +4251,10 @@ index 0000000..d18a80e
 +    }
 +#endif
 +
-+    // logo: a node with three expanding radio arcs
-+    const int32_t cx = W() / 2, cy = H() / 2 - 40;
-+    const int32_t radii[3] = {26, 44, 62};
++    // logo: a node with three expanding radio arcs (smaller and higher on a landscape panel, where the
++    // title, spinner and status lines need the lower half)
++    const int32_t cx = W() / 2, cy = LAND ? 66 : H() / 2 - 40;
++    const int32_t radii[3] = {LAND ? 20 : 26, LAND ? 34 : 44, LAND ? 48 : 62};
 +    for (int i = 0; i < 3; i++) {
 +        lv_obj_t *a = lv_arc_create(bootScreen);
 +        lv_obj_remove_style(a, NULL, LV_PART_KNOB);
@@ -4077,7 +4279,7 @@ index 0000000..d18a80e
 +    lv_obj_set_style_shadow_opa(dot, LV_OPA_60, 0);
 +
 +    lv_obj_t *title = label(bootScreen, &lv_font_montserrat_28, C_TEXT, HOPTICS_NAME);
-+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 34);
++    lv_obj_align(title, LV_ALIGN_CENTER, 0, LAND ? -8 : 34);
 +    lv_obj_set_style_text_letter_space(title, 2, 0);
 +    lv_obj_t *tag = label(bootScreen, &F12, C_MUTED, "mesh, made visible");
 +    lv_obj_align_to(tag, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
@@ -4089,10 +4291,10 @@ index 0000000..d18a80e
 +    lv_obj_set_style_arc_width(spin, 3, LV_PART_INDICATOR);
 +    lv_obj_set_style_arc_color(spin, C_LINE, LV_PART_MAIN);
 +    lv_obj_set_style_arc_color(spin, C_CYAN, LV_PART_INDICATOR);
-+    lv_obj_align(spin, LV_ALIGN_BOTTOM_MID, 0, -52);
++    lv_obj_align(spin, LV_ALIGN_BOTTOM_MID, 0, LAND ? -64 : -52);
 +
 +    bootStatus = label(bootScreen, &F12, C_MUTED, "Starting radio...");
-+    lv_obj_align(bootStatus, LV_ALIGN_BOTTOM_MID, 0, -28);
++    lv_obj_align(bootStatus, LV_ALIGN_BOTTOM_MID, 0, LAND ? -36 : -28);
 +    char buf[64];
 +    snprintf(buf, sizeof(buf), "v" HOPTICS_VERSION "  -  Meshtastic %s", fwVersion);
 +    lv_obj_t *ver = label(bootScreen, FSMALL, C_DIM, buf);
@@ -4114,15 +4316,18 @@ index 0000000..d18a80e
 +{
 +    if (!phoneScreen) {
 +        initFonts();
++        applyLayout();
++        keysInit();
++        NoAutoGroup noAuto(keysOn);
 +        phoneScreen = lv_obj_create(NULL);
 +        lv_obj_remove_flag(phoneScreen, LV_OBJ_FLAG_SCROLLABLE);
 +        lv_obj_set_style_bg_color(phoneScreen, C_BG, 0);
 +        lv_obj_set_style_bg_grad_color(phoneScreen, C_CARD2, 0);
 +        lv_obj_set_style_bg_grad_dir(phoneScreen, LV_GRAD_DIR_VER, 0);
-+        lv_obj_set_style_pad_all(phoneScreen, 14, 0);
++        lv_obj_set_style_pad_all(phoneScreen, LAND ? 10 : 14, 0);
 +        lv_obj_set_flex_flow(phoneScreen, LV_FLEX_FLOW_COLUMN);
 +        lv_obj_set_flex_align(phoneScreen, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-+        lv_obj_set_style_pad_row(phoneScreen, 10, 0);
++        lv_obj_set_style_pad_row(phoneScreen, LAND ? 5 : 10, 0);
 +
 +        lv_obj_t *icon = label(phoneScreen, &F20, C_BLUE, LV_SYMBOL_BLUETOOTH);
 +        lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
@@ -4134,7 +4339,9 @@ index 0000000..d18a80e
 +        lv_obj_set_style_text_align(phoneMsg, LV_TEXT_ALIGN_CENTER, 0);
 +        phonePin = label(phoneScreen, &F20, C_BLUE, "");
 +        lv_obj_set_style_text_font(phonePin, &lv_font_montserrat_28, 0);
-+        phoneBtn = flatButton(phoneScreen, LV_SYMBOL_HOME " Back to touch screen", C_GREEN, W() - 28, 44);
++        phoneBtn = flatButton(phoneScreen, touchInput ? LV_SYMBOL_HOME " Back to touch screen" : LV_SYMBOL_HOME " Back to this screen",
++                              C_GREEN, LAND ? 240 : W() - 28, LAND ? 38 : 44);
++        stop(phoneBtn);
 +        // two-tap confirm, like Reboot: the first tap arms the button for 3 s
 +        lv_obj_add_event_cb(
 +            phoneBtn,
@@ -4148,14 +4355,15 @@ index 0000000..d18a80e
 +                    return;
 +                }
 +                lv_obj_add_state(b, LV_STATE_USER_1);
-+                setButtonText(b, "Tap again to restart");
++                setButtonText(b, ui->touchInput ? "Tap again to restart" : "Press again to restart");
 +                lv_timer_t *t = lv_timer_create(
 +                    [](lv_timer_t *t) {
-+                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
-+                        lv_obj_remove_state(btn, LV_STATE_USER_1);
-+                        setButtonText(btn, LV_SYMBOL_HOME " Back to touch screen");
++                        HopticsUI *u = (HopticsUI *)lv_timer_get_user_data(t);
++                        lv_obj_remove_state(u->phoneBtn, LV_STATE_USER_1);
++                        setButtonText(u->phoneBtn, u->touchInput ? LV_SYMBOL_HOME " Back to touch screen"
++                                                                 : LV_SYMBOL_HOME " Back to this screen");
 +                    },
-+                    3000, b);
++                    3000, ui);
 +                lv_timer_set_repeat_count(t, 1);
 +            },
 +            LV_EVENT_CLICKED, this);
@@ -4164,13 +4372,16 @@ index 0000000..d18a80e
 +    }
 +    if (restarting) {
 +        lv_label_set_text(phoneMsg, pin ? "Restarting with Bluetooth on for the Meshtastic app..."
-+                                        : "Restarting back to the touch screen...");
++                                        : (touchInput ? "Restarting back to the touch screen..." : "Restarting back to this screen..."));
 +        lv_obj_add_flag(phoneBtn, LV_OBJ_FLAG_HIDDEN);
 +    } else {
-+        lv_label_set_text(phoneMsg, "Bluetooth is on for the Meshtastic app. The touch screen is paused while the app "
-+                                    "is in charge. Pair the app with this PIN:");
++        lv_label_set_text(phoneMsg, touchInput ? "Bluetooth is on for the Meshtastic app. The touch screen is paused while the "
++                                                 "app is in charge. Pair the app with this PIN:"
++                                               : "Bluetooth is on for the Meshtastic app. This screen is paused while the app "
++                                                 "is in charge. Pair the app with this PIN:");
 +        lv_obj_remove_flag(phoneBtn, LV_OBJ_FLAG_HIDDEN);
 +    }
++    keyScope(phoneBtn);
 +    if (pin)
 +        lv_label_set_text_fmt(phonePin, "%06u", (unsigned)pin);
 +    else if (!restarting)
@@ -4186,6 +4397,9 @@ index 0000000..d18a80e
 +        return;
 +    initFonts();
 +    applyPalette(themeIdx);
++    applyLayout();
++    keysInit();
++    NoAutoGroup noAuto(keysOn);
 +    if (!envUnitsLoaded) {
 +        loadEnvUnits(envUnitF, envUnitInHg);
 +        envTempOff = loadEnvTempOff();
@@ -4201,8 +4415,8 @@ index 0000000..d18a80e
 +    buildStatusBar(mainScreen);
 +
 +    content = plain(mainScreen);
-+    lv_obj_set_pos(content, 0, STATUS_H);
-+    lv_obj_set_size(content, W(), H() - STATUS_H - NAV_H);
++    lv_obj_set_pos(content, RAIL_W, STATUS_H);
++    lv_obj_set_size(content, PW(), H() - STATUS_H - (LAND ? 0 : NAV_H));
 +
 +    for (int i = 0; i < T_COUNT; i++) {
 +        lv_obj_t *p = plain(content);
@@ -4236,8 +4450,8 @@ index 0000000..d18a80e
 +
 +    // toast
 +    toast = plain(mainScreen);
-+    lv_obj_set_size(toast, W() - 16, LV_SIZE_CONTENT);
-+    lv_obj_align(toast, LV_ALIGN_TOP_MID, 0, STATUS_H + 4);
++    lv_obj_set_size(toast, PW() - 16, LV_SIZE_CONTENT);
++    lv_obj_align(toast, LV_ALIGN_TOP_MID, RAIL_W / 2, STATUS_H + 4);
 +    lv_obj_set_style_bg_color(toast, C_CARD2, 0);
 +    lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, 0);
 +    lv_obj_set_style_border_color(toast, C_CYAN, 0);
@@ -4310,6 +4524,11 @@ index 0000000..d18a80e
 +    nodeOvNum = 0;
 +    bubbleRefs.clear();
 +    kbTarget = nullptr;
++    // every control is rebuilt: forget the old focus bookkeeping
++    focusMemo.clear();
++    scopeStops.clear();
++    scopeRoot = nullptr;
++    mapPan = false;
 +    buildMainScreen();
 +    lv_screen_load(mainScreen);
 +    lv_obj_delete(old);
@@ -4333,7 +4552,8 @@ index 0000000..d18a80e
 +void HopticsUI::buildStatusBar(lv_obj_t *parent)
 +{
 +    lv_obj_t *bar = plain(parent);
-+    lv_obj_set_size(bar, W(), STATUS_H);
++    lv_obj_set_size(bar, PW(), STATUS_H);
++    lv_obj_set_pos(bar, RAIL_W, 0);
 +    lv_obj_set_style_bg_color(bar, C_BAR, 0);
 +    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
 +    lv_obj_set_style_pad_hor(bar, 5, 0);
@@ -4361,6 +4581,8 @@ index 0000000..d18a80e
 +    lv_obj_remove_style_all(gear);
 +    lv_obj_set_size(gear, 22, 22);
 +    lv_obj_set_ext_click_area(gear, 8);
++    statusGear = gear;
++    stop(gear);
 +    lv_obj_t *gl = label(gear, &F14, C_MUTED, LV_SYMBOL_SETTINGS);
 +    lv_obj_center(gl);
 +    lv_obj_set_style_text_color(gl, C_CYAN, LV_STATE_PRESSED);
@@ -4446,30 +4668,41 @@ index 0000000..d18a80e
 +                                         LV_SYMBOL_BARS};
 +    static const char *names[T_COUNT] = {"Home", "Live", "Map", "Chat", "Nodes", "Stats"};
 +    lv_obj_t *bar = plain(parent);
-+    lv_obj_set_size(bar, W(), NAV_H);
-+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
++    navBar = bar;
++    if (LAND) {
++        // landscape: a rail down the left edge, full height
++        lv_obj_set_size(bar, RAIL_W, H());
++        lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_RIGHT, 0);
++        lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN);
++    } else {
++        lv_obj_set_size(bar, W(), NAV_H);
++        lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
++        lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
++        lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
++    }
 +    lv_obj_set_style_bg_color(bar, C_BAR, 0);
 +    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-+    lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
 +    lv_obj_set_style_border_width(bar, 1, 0);
 +    lv_obj_set_style_border_color(bar, C_LINE, 0);
-+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
 +
 +    for (int i = 0; i < T_COUNT; i++) {
 +        lv_obj_t *b = lv_button_create(bar);
 +        lv_obj_remove_style_all(b);
-+        lv_obj_set_height(b, LV_PCT(100));
++        if (LAND)
++            lv_obj_set_width(b, LV_PCT(100));
++        else
++            lv_obj_set_height(b, LV_PCT(100));
 +        lv_obj_set_flex_grow(b, 1);
-+        lv_obj_set_style_border_side(b, LV_BORDER_SIDE_TOP, LV_STATE_CHECKED);
-+        lv_obj_set_style_border_width(b, 2, LV_STATE_CHECKED);
++        lv_obj_set_style_border_side(b, LAND ? LV_BORDER_SIDE_LEFT : LV_BORDER_SIDE_TOP, LV_STATE_CHECKED);
++        lv_obj_set_style_border_width(b, LAND ? 3 : 2, LV_STATE_CHECKED);
 +        lv_obj_set_style_border_color(b, C_CYAN, LV_STATE_CHECKED);
 +        lv_obj_set_style_bg_color(b, C_CYAN, LV_STATE_PRESSED);
 +        lv_obj_set_style_bg_opa(b, LV_OPA_10, LV_STATE_PRESSED);
 +        lv_obj_t *ic = label(b, &F16, C_DIM, icons[i]);
-+        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 6);
++        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, LAND ? 4 : 6);
 +        lv_obj_set_style_text_color(ic, C_CYAN, LV_STATE_CHECKED);
 +        lv_obj_t *nm = label(b, FSMALL, C_DIM, names[i]);
-+        lv_obj_align(nm, LV_ALIGN_BOTTOM_MID, 0, -4);
++        lv_obj_align(nm, LV_ALIGN_BOTTOM_MID, 0, LAND ? -3 : -4);
 +        lv_obj_set_style_text_color(nm, C_TEXT, LV_STATE_CHECKED);
 +        lv_obj_add_flag(ic, LV_OBJ_FLAG_EVENT_BUBBLE);
 +        lv_obj_set_user_data(b, (void *)(intptr_t)i);
@@ -4482,6 +4715,7 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        navBtns[i] = b;
++        stop(b);
 +        if (i == T_CHAT) {
 +            navBadge = label(b, FSMALL, lv_color_white(), "");
 +            lv_obj_set_style_bg_color(navBadge, C_RED, 0);
@@ -4489,7 +4723,7 @@ index 0000000..d18a80e
 +            lv_obj_set_style_radius(navBadge, 7, 0);
 +            lv_obj_set_style_pad_hor(navBadge, 4, 0);
 +            lv_obj_set_style_text_color(navBadge, lv_color_white(), 0);
-+            lv_obj_align(navBadge, LV_ALIGN_TOP_MID, 10, 2);
++            lv_obj_align(navBadge, LV_ALIGN_TOP_MID, 10, LAND ? 1 : 2);
 +            lv_obj_add_flag(navBadge, LV_OBJ_FLAG_HIDDEN);
 +        }
 +    }
@@ -4536,6 +4770,7 @@ index 0000000..d18a80e
 +    default:
 +        break;
 +    }
++    keyScope();
 +}
 +
 +// ================================================================= HOME
@@ -4546,13 +4781,16 @@ index 0000000..d18a80e
 +    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
 +    lv_obj_set_style_pad_row(grid, PAD, 0);
 +    lv_obj_set_style_pad_column(grid, PAD, 0);
-+    statTile(grid, "NODES ONLINE", C_CYAN, &homeOnline, &homeOnlineSub);
-+    statTile(grid, "CHANNEL UTIL", C_AMBER, &homeChUtil, &homeChUtilSub);
-+    statTile(grid, "AIRTIME TX", C_VIOLET, &homeAir, &homeAirSub);
-+    statTile(grid, "PACKETS / MIN", C_GREEN, &homeRate, &homeRateSub);
++    statTile(grid, "NODES ONLINE", C_CYAN, &homeOnline, &homeOnlineSub, "ONLINE");
++    statTile(grid, "CHANNEL UTIL", C_AMBER, &homeChUtil, &homeChUtilSub, "CH UTIL");
++    statTile(grid, "AIRTIME TX", C_VIOLET, &homeAir, &homeAirSub, "AIR TX");
++    statTile(grid, "PACKETS / MIN", C_GREEN, &homeRate, &homeRateSub, "PKT/MIN");
 +
 +    // environment sensors on the expansion board - tap for graphs
-+    homeEnv = card(p, "ENVIRONMENT  -  this radio's sensors");
++    // boards without sensor slots (T-Deck, ThinkNode M9) usually have no sensor: the card then lists what
++    // other nodes share, and shows this radio's readings only if someone wired a sensor in
++    homeEnv = card(p, hoptics::board::kSensorSlots ? "ENVIRONMENT  -  this radio's sensors" : "ENVIRONMENT");
++    stop(homeEnv);
 +    lv_obj_set_style_bg_color(homeEnv, C_CARD2, LV_STATE_PRESSED);
 +    lv_obj_add_event_cb(
 +        homeEnv, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openEnv(); }, LV_EVENT_CLICKED, this);
@@ -4630,6 +4868,7 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        homeLast[i] = r;
++        stop(r);
 +        lv_obj_add_flag(r, LV_OBJ_FLAG_HIDDEN);
 +    }
 +}
@@ -4742,6 +4981,7 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        liveChips[i] = b;
++        stop(b);
 +    }
 +    liveEmpty = label(p, &F14, C_MUTED, "Listening...\nPackets will appear here as they arrive.");
 +    lv_obj_set_width(liveEmpty, LV_PCT(100));
@@ -4761,7 +5001,7 @@ index 0000000..d18a80e
 +        lv_obj_align(r.badge, LV_ALIGN_LEFT_MID, 5, 0);
 +        r.name = label(r.row, &F14, C_TEXT, "");
 +        oneLine(r.name);
-+        lv_obj_set_width(r.name, W() - 2 * PAD - 52 - 70);
++        lv_obj_set_width(r.name, PW() - 2 * PAD - 52 - 70);
 +        lv_obj_set_pos(r.name, 52, 3);
 +        r.port = pill(r.row, "", C_BLUE);
 +        lv_obj_set_pos(r.port, 52, 22);
@@ -4779,6 +5019,7 @@ index 0000000..d18a80e
 +                    ui->openNode(num);
 +            },
 +            LV_EVENT_CLICKED, this);
++        stop(r.row);
 +        lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
 +    }
 +}
@@ -4878,6 +5119,13 @@ index 0000000..d18a80e
 +    if (!mainScreen)
 +        return;
 +    dirtyChats = false;
++    // the rows are rebuilt: keep the keyboard focus on the same conversation
++    if (keysOn && chatFocusKey == UINT32_MAX) {
++        lv_obj_t *f = lv_group_get_focused(keyGroup);
++        if (f && lv_obj_get_parent(f) == chatList)
++            chatFocusKey = (uint32_t)(uintptr_t)lv_obj_get_user_data(f);
++    }
++    lv_obj_t *focusRow = nullptr;
 +    lv_obj_clean(chatList);
 +
 +    std::vector<uint32_t> keys;
@@ -4897,6 +5145,8 @@ index 0000000..d18a80e
 +        lv_obj_set_width(l, LV_PCT(100));
 +        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
 +        lv_obj_set_style_pad_top(l, 60, 0);
++        chatFocusKey = UINT32_MAX;
++        keyScope();
 +        return;
 +    }
 +
@@ -4912,6 +5162,9 @@ index 0000000..d18a80e
 +        }
 +        const Conv *c = convPtr(key);
 +        lv_obj_t *r = plain(chatList);
++        stop(r);
++        if (key == chatFocusKey)
++            focusRow = r;
 +        lv_obj_set_size(r, LV_PCT(100), 46);
 +        lv_obj_set_style_bg_color(r, C_CARD, 0);
 +        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
@@ -4943,7 +5196,7 @@ index 0000000..d18a80e
 +
 +        lv_obj_t *t = label(r, &F14, C_TEXT, convTitle(key, buf, sizeof(buf)));
 +        oneLine(t);
-+        lv_obj_set_width(t, W() - 2 * PAD - 48 - 50);
++        lv_obj_set_width(t, PW() - 2 * PAD - 48 - 50);
 +        lv_obj_set_pos(t, 48, 5);
 +
 +        const char *preview = "No messages yet";
@@ -4963,7 +5216,7 @@ index 0000000..d18a80e
 +        }
 +        lv_obj_t *pl = label(r, &F12, C_MUTED, preview);
 +        oneLine(pl);
-+        lv_obj_set_width(pl, W() - 2 * PAD - 48 - 36);
++        lv_obj_set_width(pl, PW() - 2 * PAD - 48 - 36);
 +        lv_obj_set_pos(pl, 48, 25);
 +
 +        if (c && c->lastTime) {
@@ -4983,6 +5236,9 @@ index 0000000..d18a80e
 +            lv_obj_align(u, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
 +        }
 +    }
++    chatFocusKey = UINT32_MAX;
++    if (keysOn && activeTab == T_CHAT)
++        keyScope(focusRow);
 +}
 +
 +// ================================================================= NODES
@@ -5018,6 +5274,7 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        sortBtns[i] = b;
++        stop(b);
 +    }
 +
 +    for (int i = 0; i < HOPTICS_NODE_ROWS; i++) {
@@ -5033,11 +5290,11 @@ index 0000000..d18a80e
 +        lv_obj_align(r.badge, LV_ALIGN_LEFT_MID, 5, 0);
 +        r.name = label(r.row, &F14, C_TEXT, "");
 +        oneLine(r.name);
-+        lv_obj_set_width(r.name, W() - 2 * PAD - 52 - 54);
++        lv_obj_set_width(r.name, PW() - 2 * PAD - 52 - 54);
 +        lv_obj_set_pos(r.name, 52, 4);
 +        r.sub = label(r.row, FSMALL, C_MUTED, "");
 +        oneLine(r.sub);
-+        lv_obj_set_width(r.sub, W() - 2 * PAD - 52 - 54);
++        lv_obj_set_width(r.sub, PW() - 2 * PAD - 52 - 54);
 +        lv_obj_set_pos(r.sub, 52, 24);
 +        r.sig = label(r.row, &F12, C_GREEN, "");
 +        lv_obj_align(r.sig, LV_ALIGN_TOP_RIGHT, -6, 5);
@@ -5052,6 +5309,7 @@ index 0000000..d18a80e
 +                    ui->openNode(num);
 +            },
 +            LV_EVENT_CLICKED, this);
++        stop(r.row);
 +        lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
 +    }
 +    nodesMore = label(p, &F12, C_DIM, "");
@@ -5169,6 +5427,7 @@ index 0000000..d18a80e
 +{
 +    // channel load
 +    lv_obj_t *c1 = card(p, "CHANNEL LOAD  -  % per minute");
++    stop(c1); // read-only: a stop so keys can scroll the page
 +    statUtilChart = makeChart(c1, 80, LV_CHART_TYPE_LINE, HOPTICS_HISTORY);
 +    lv_chart_set_axis_range(statUtilChart, LV_CHART_AXIS_PRIMARY_Y, 0, 40);
 +    serChUtil = lv_chart_add_series(statUtilChart, C_AMBER, LV_CHART_AXIS_PRIMARY_Y);
@@ -5184,6 +5443,7 @@ index 0000000..d18a80e
 +
 +    // packet rate
 +    lv_obj_t *c2 = card(p, "PACKETS PER MINUTE");
++    stop(c2);
 +    statRateChart = makeChart(c2, 64, LV_CHART_TYPE_BAR, HOPTICS_HISTORY);
 +    serRate = lv_chart_add_series(statRateChart, C_GREEN, LV_CHART_AXIS_PRIMARY_Y);
 +    lv_chart_set_all_values(statRateChart, serRate, LV_CHART_POINT_NONE);
@@ -5191,6 +5451,7 @@ index 0000000..d18a80e
 +
 +    // signal
 +    lv_obj_t *c3 = card(p, "SIGNAL  -  last packets heard", &statSigCaption);
++    stop(c3);
 +    statSigChart = makeChart(c3, 80, LV_CHART_TYPE_LINE, HOPTICS_SIGNAL_HISTORY);
 +    lv_chart_set_axis_range(statSigChart, LV_CHART_AXIS_PRIMARY_Y, -130, -30);
 +    lv_chart_set_axis_range(statSigChart, LV_CHART_AXIS_SECONDARY_Y, -20, 15);
@@ -5207,6 +5468,7 @@ index 0000000..d18a80e
 +
 +    // hops
 +    lv_obj_t *c4 = card(p, "NODES BY HOPS AWAY  -  0 = direct", &statHopCaption);
++    stop(c4);
 +    lv_obj_set_width(statHopCaption, LV_PCT(100));
 +    oneLine(statHopCaption);
 +    statHopChart = makeChart(c4, 64, LV_CHART_TYPE_BAR, 8);
@@ -5228,6 +5490,7 @@ index 0000000..d18a80e
 +    static const char *names[7] = {"Text", "Position", "Node info", "Telemetry", "Routing", "Trace/Nbr", "Other"};
 +    static const uint16_t ports[7] = {P_TEXT, P_POSITION, P_NODEINFO, P_TELEMETRY, P_ROUTING, P_TRACE, 0};
 +    lv_obj_t *c5 = card(p, "TRAFFIC MIX");
++    stop(c5);
 +    for (int i = 0; i < 7; i++) {
 +        lv_obj_t *r = plain(c5);
 +        lv_obj_set_size(r, LV_PCT(100), 16);
@@ -5249,6 +5512,7 @@ index 0000000..d18a80e
 +    }
 +
 +    lv_obj_t *ct = card(p, "TOP TALKERS  -  packets this session");
++    stop(ct);
 +    for (int i = 0; i < 5; i++) {
 +        lv_obj_t *r = plain(ct);
 +        lv_obj_set_size(r, LV_PCT(100), 18);
@@ -5267,6 +5531,7 @@ index 0000000..d18a80e
 +    }
 +
 +    lv_obj_t *c6 = card(p, "SESSION");
++    stop(c6);
 +    statTotals = label(c6, &F12, C_TEXT, "");
 +    lv_obj_set_width(statTotals, LV_PCT(100));
 +}
@@ -5381,9 +5646,19 @@ index 0000000..d18a80e
 +    column(chatMsgs, 6);
 +    lv_obj_set_style_width(chatMsgs, 3, LV_PART_SCROLLBAR);
 +    lv_obj_set_style_bg_color(chatMsgs, C_CYAN, LV_PART_SCROLLBAR);
++    stop(chatMsgs); // keys scroll the conversation when it has the focus
++    // trackball: the first press starts scrolling (LVGL edit mode), the next press ends it
++    lv_obj_add_event_cb(
++        chatMsgs,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->keyGroup && lv_group_get_editing(ui->keyGroup))
++                lv_group_set_editing(ui->keyGroup, false);
++        },
++        LV_EVENT_CLICKED, this);
 +
 +    chatInputRow = plain(chatOv);
-+    lv_obj_set_size(chatInputRow, LV_PCT(100), 44);
++    lv_obj_set_size(chatInputRow, LV_PCT(100), LAND ? 42 : 44);
 +    lv_obj_set_style_bg_color(chatInputRow, C_BAR, 0);
 +    lv_obj_set_style_bg_opa(chatInputRow, LV_OPA_COVER, 0);
 +    lv_obj_set_style_pad_all(chatInputRow, 4, 0);
@@ -5393,9 +5668,10 @@ index 0000000..d18a80e
 +    lv_textarea_set_one_line(chatInput, true);
 +    lv_textarea_set_max_length(chatInput, 200);
 +    lv_textarea_set_placeholder_text(chatInput, "Message");
-+    lv_obj_set_height(chatInput, 36);
++    lv_obj_set_height(chatInput, LAND ? 34 : 36);
 +    lv_obj_set_flex_grow(chatInput, 1);
 +    styleTextarea(chatInput);
++    stop(chatInput);
 +    lv_obj_add_event_cb(
 +        chatInput, [](lv_event_t *e) { HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e); ui->showKeyboard(ui->chatInput); },
 +        LV_EVENT_CLICKED, this);
@@ -5404,13 +5680,14 @@ index 0000000..d18a80e
 +
 +    lv_obj_t *send = lv_button_create(chatInputRow);
 +    lv_obj_remove_style_all(send);
-+    lv_obj_set_size(send, 40, 36);
-+    lv_obj_set_style_radius(send, 18, 0);
++    lv_obj_set_size(send, 40, LAND ? 34 : 36);
++    lv_obj_set_style_radius(send, LAND ? 17 : 18, 0);
 +    lv_obj_set_style_bg_color(send, C_CYAN, 0);
 +    lv_obj_set_style_bg_opa(send, LV_OPA_COVER, 0);
 +    lv_obj_set_style_bg_color(send, C_GREEN, LV_STATE_PRESSED);
 +    lv_obj_t *sl = label(send, &F16, C_ON_ACCENT, LV_SYMBOL_UPLOAD);
 +    lv_obj_center(sl);
++    stop(send);
 +    lv_obj_add_event_cb(
 +        send, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->sendFromChat(); }, LV_EVENT_CLICKED, this);
 +}
@@ -5418,6 +5695,7 @@ index 0000000..d18a80e
 +void HopticsUI::appendBubble(const Msg &m)
 +{
 +    const bool mine = (m.from == myNode);
++    const int32_t maxW = LAND ? W() * 72 / 100 : (W() * 4) / 5; // long lines stay readable on the wide screen
 +    lv_obj_t *line = plain(chatMsgs);
 +    lv_obj_set_size(line, LV_PCT(100), LV_SIZE_CONTENT);
 +    lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
@@ -5425,7 +5703,7 @@ index 0000000..d18a80e
 +
 +    lv_obj_t *b = plain(line);
 +    lv_obj_set_size(b, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-+    lv_obj_set_style_max_width(b, (W() * 4) / 5, 0);
++    lv_obj_set_style_max_width(b, maxW, 0);
 +    lv_obj_set_style_bg_color(b, mine ? C_ME : C_CARD2, 0);
 +    if (T_BORDERS && !mine) {
 +        lv_obj_set_style_border_width(b, 1, 0);
@@ -5441,11 +5719,11 @@ index 0000000..d18a80e
 +    if (!mine && chatKey < kMaxChannels) {
 +        lv_obj_t *who = label(b, &F12, nodeColor(m.from), nodeLong(m.from, buf, sizeof(buf)));
 +        oneLine(who);
-+        lv_obj_set_style_max_width(who, (W() * 4) / 5 - 18, 0);
++        lv_obj_set_style_max_width(who, maxW - 18, 0);
 +    }
 +    lv_obj_t *t = label(b, &F14, mine ? C_ON_ME : C_TEXT, m.text.c_str());
 +    lv_label_set_long_mode(t, LV_LABEL_LONG_MODE_WRAP);
-+    lv_obj_set_style_max_width(t, (W() * 4) / 5 - 18, 0);
++    lv_obj_set_style_max_width(t, maxW - 18, 0);
 +
 +    char ts[24] = "";
 +    if (m.time && m.time <= nowTs + 60) {
@@ -5503,17 +5781,21 @@ index 0000000..d18a80e
 +    lv_obj_move_to_index(toast, -1);
 +    dirtyChats = true;
 +    refreshStatusBar();
++    keyScope(chatInput); // a keyboard types straight into the message
 +}
 +
 +void HopticsUI::closeChat(void)
 +{
 +    hideKeyboard();
 +    lv_obj_add_flag(chatOv, LV_OBJ_FLAG_HIDDEN);
++    chatFocusKey = chatKey; // back on the list: focus the conversation we came from
 +    chatKey = UINT32_MAX;
 +    lv_obj_clean(chatMsgs);
 +    bubbleRefs.clear();
 +    if (activeTab == T_CHAT)
 +        refreshChatList();
++    chatFocusKey = UINT32_MAX;
++    keyScope();
 +}
 +
 +void HopticsUI::sendFromChat(void)
@@ -5540,6 +5822,7 @@ index 0000000..d18a80e
 +    column(body, PAD);
 +
 +    lv_obj_t *hero = card(body, nullptr);
++    stop(hero); // the cards are read-only stops, so keys scroll through the page
 +    lv_obj_set_flex_flow(hero, LV_FLEX_FLOW_ROW);
 +    lv_obj_set_flex_align(hero, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 +    lv_obj_set_style_pad_column(hero, 10, 0);
@@ -5555,17 +5838,20 @@ index 0000000..d18a80e
 +    nodeOvId = label(col, &F12, C_MUTED, "");
 +
 +    nodeOvEnv = card(body, "SENSORS");
++    stop(nodeOvEnv);
 +    nodeOvEnvText = label(nodeOvEnv, &F12, C_TEXT, "");
 +    lv_obj_set_width(nodeOvEnvText, LV_PCT(100));
 +    lv_obj_set_style_text_line_space(nodeOvEnvText, 3, 0);
 +    lv_obj_add_flag(nodeOvEnv, LV_OBJ_FLAG_HIDDEN);
 +
 +    lv_obj_t *ic = card(body, "DETAILS");
++    stop(ic);
 +    nodeOvInfo = label(ic, &F12, C_TEXT, "");
 +    lv_obj_set_width(nodeOvInfo, LV_PCT(100));
 +    lv_obj_set_style_text_line_space(nodeOvInfo, 3, 0);
 +
 +    lv_obj_t *sc = card(body, "SNR HISTORY  -  last packets heard direct");
++    stop(sc);
 +    nodeOvChart = makeChart(sc, 56, LV_CHART_TYPE_LINE, 16);
 +    lv_chart_set_axis_range(nodeOvChart, LV_CHART_AXIS_PRIMARY_Y, -20, 15);
 +    nodeOvSeries = lv_chart_add_series(nodeOvChart, C_PINK, LV_CHART_AXIS_PRIMARY_Y);
@@ -5577,6 +5863,9 @@ index 0000000..d18a80e
 +    lv_obj_t *bm = flatButton(acts, LV_SYMBOL_ENVELOPE " DM", C_CYAN, bw, 36);
 +    lv_obj_t *bt = flatButton(acts, LV_SYMBOL_SHUFFLE " Trace", C_PINK, bw, 36);
 +    lv_obj_t *bp = flatButton(acts, LV_SYMBOL_GPS " Pos", C_GREEN, bw, 36);
++    stop(bm);
++    stop(bt);
++    stop(bp);
 +    lv_obj_add_event_cb(
 +        bm,
 +        [](lv_event_t *e) {
@@ -5607,10 +5896,16 @@ index 0000000..d18a80e
 +        LV_EVENT_CLICKED, this);
 +
 +    lv_obj_t *tc = card(body, "TRACE ROUTE");
++    stop(tc);
 +    nodeOvTrace = label(tc, &F12, C_TEXT, "");
 +    lv_obj_set_width(nodeOvTrace, LV_PCT(100));
 +    lv_label_set_long_mode(nodeOvTrace, LV_LABEL_LONG_MODE_WRAP);
 +    lv_obj_add_flag(tc, LV_OBJ_FLAG_HIDDEN);
++    if (LAND) {
++        // short screen: the buttons (and what Trace finds) go right under the name, before the long cards
++        lv_obj_move_to_index(acts, 1);
++        lv_obj_move_to_index(tc, 2);
++    }
 +}
 +
 +void HopticsUI::openNode(uint32_t num)
@@ -5626,12 +5921,14 @@ index 0000000..d18a80e
 +    lv_obj_remove_flag(nodeOv, LV_OBJ_FLAG_HIDDEN);
 +    lv_obj_move_to_index(nodeOv, -1);
 +    lv_obj_move_to_index(toast, -1);
++    keyScope(lv_obj_get_child(body, 0)); // the name card, at the top
 +}
 +
 +void HopticsUI::closeNode(void)
 +{
 +    lv_obj_add_flag(nodeOv, LV_OBJ_FLAG_HIDDEN);
 +    nodeOvNum = 0;
++    keyScope();
 +}
 +
 +void HopticsUI::refreshNodeOverlay(void)
@@ -5980,9 +6277,9 @@ index 0000000..d18a80e
 +    lv_label_set_text(setEnvCorr, envTempOff ? b : "None");
 +    fmtTemp(now, sizeof(now), envNow.temp);
 +    lv_label_set_text_fmt(setEnvCorrNote,
-+                          "Reads %s now. Tap - or + until it matches a thermometer in the room: the sensors sit inside "
++                          "Reads %s now. %s - or + until it matches a thermometer in the room: the sensors sit inside "
 +                          "the case and read warm. Humidity is corrected to match.",
-+                          now);
++                          now, touchInput ? "Tap" : "Press");
 +}
 +
 +void HopticsUI::stepEnvCorr(int dir)
@@ -6050,13 +6347,32 @@ index 0000000..d18a80e
 +{
 +    if (!homeEnv)
 +        return;
-+    char b[40], c[64], ago[12];
++    char b[40], c[96], ago[12];
++    // the big reading's row: hidden while a board without sensor slots has nothing of its own to show
++    lv_obj_t *nowRow = lv_obj_get_parent(lv_obj_get_parent(homeEnvTemp));
++    if (!envHasData() && !hoptics::board::kSensorSlots) {
++        uint32_t sharing = 0;
++        for (const auto &n : nodes)
++            sharing += n.envTime && n.num != myNode;
++        lv_obj_add_flag(nowRow, LV_OBJ_FLAG_HIDDEN);
++        lv_obj_add_flag(homeEnvChart, LV_OBJ_FLAG_HIDDEN);
++        if (sharing)
++            snprintf(c, sizeof(c), "No sensor on this radio. %u node%s on the mesh share readings - open for the list.",
++                     (unsigned)sharing, sharing == 1 ? "" : "s");
++        else
++            snprintf(c, sizeof(c), "No sensor on this radio. Readings other nodes share on the mesh show up here.");
++        lv_label_set_text(homeEnvSub, c);
++        return;
++    }
++    if (!hoptics::board::kSensorSlots)
++        lv_obj_remove_flag(nowRow, LV_OBJ_FLAG_HIDDEN);
 +    if (!envHasData()) {
 +        lv_label_set_text(homeEnvTemp, "--");
 +        lv_label_set_text(homeEnvUnit, "");
 +        lv_label_set_text(homeEnvHum, "");
 +        lv_label_set_text(homeEnvPress, "");
-+        lv_label_set_text(homeEnvSub, minutesUp >= 5 ? "No sensor readings yet. Is the sensor board seated? Tap for more."
++        lv_label_set_text(homeEnvSub, minutesUp >= 5 ? (touchInput ? "No sensor readings yet. Is the sensor board seated? Tap for more."
++                                                                   : "No sensor readings yet. Is the sensor board seated? Open for more.")
 +                                                     : "Starting the sensors - the first reading comes in about a minute.");
 +        lv_obj_add_flag(homeEnvChart, LV_OBJ_FLAG_HIDDEN);
 +        return;
@@ -6108,6 +6424,7 @@ index 0000000..d18a80e
 +    column(body, PAD);
 +
 +    lv_obj_t *nc = card(body, "NOW  -  this radio's sensors");
++    stop(nc);
 +    envOvNow = label(nc, &F20, C_TEXT, "");
 +    lv_obj_set_width(envOvNow, LV_PCT(100));
 +    lv_label_set_long_mode(envOvNow, LV_LABEL_LONG_MODE_WRAP);
@@ -6119,12 +6436,14 @@ index 0000000..d18a80e
 +    const lv_color_t cols[3] = {C_AMBER, C_BLUE, C_VIOLET};
 +    for (int k = 0; k < 3; k++) {
 +        lv_obj_t *c = card(body, ENV_TITLES[k]);
-+        envOvChart[k] = makeChart(c, 72, LV_CHART_TYPE_LINE, 12);
++        stop(c);
++        envOvChart[k] = makeChart(c, LAND ? 56 : 72, LV_CHART_TYPE_LINE, 12);
 +        envOvSer[k] = lv_chart_add_series(envOvChart[k], cols[k], LV_CHART_AXIS_PRIMARY_Y);
 +        envOvCap[k] = label(c, FSMALL, C_MUTED, "");
 +    }
 +
 +    envOvNearbyCard = card(body, "SENSORS ON THE MESH");
++    stop(envOvNearbyCard);
 +    envOvNearby = plain(envOvNearbyCard);
 +    lv_obj_set_size(envOvNearby, LV_PCT(100), LV_SIZE_CONTENT);
 +    column(envOvNearby, 2);
@@ -6146,12 +6465,15 @@ index 0000000..d18a80e
 +    lv_obj_remove_flag(envOv, LV_OBJ_FLAG_HIDDEN);
 +    lv_obj_move_to_index(envOv, -1);
 +    lv_obj_move_to_index(toast, -1);
++    keyScope(lv_obj_get_child(lv_obj_get_child(envOv, 1), 0)); // "NOW", at the top
 +}
 +
 +void HopticsUI::closeEnv(void)
 +{
-+    if (envOv)
-+        lv_obj_add_flag(envOv, LV_OBJ_FLAG_HIDDEN);
++    if (!envOv)
++        return;
++    lv_obj_add_flag(envOv, LV_OBJ_FLAG_HIDDEN);
++    keyScope();
 +}
 +
 +void HopticsUI::refreshEnvOverlay(void)
@@ -6162,9 +6484,12 @@ index 0000000..d18a80e
 +    std::string meta;
 +    if (!envHasData()) {
 +        lv_label_set_text(envOvNow, "No readings yet");
-+        meta = minutesUp >= 5 ? "Nothing from the sensors so far. Check that the expansion board is seated; the log "
-+                                "lists the sensors found at start-up."
-+                              : "The sensors are read about once a minute.";
++        if (!hoptics::board::kSensorSlots)
++            meta = "This radio has no environment sensor. Readings that other nodes share are listed below.";
++        else
++            meta = minutesUp >= 5 ? "Nothing from the sensors so far. Check that the expansion board is seated; the log "
++                                    "lists the sensors found at start-up."
++                                  : "The sensors are read about once a minute.";
 +    } else {
 +        fmtTemp(a, sizeof(a), envNow.temp);
 +        if (std::isnan(envNow.hum))
@@ -6213,15 +6538,24 @@ index 0000000..d18a80e
 +    std::sort(list.begin(), list.end(), [](const Node *x, const Node *y) { return x->envTime > y->envTime; });
 +    if (list.size() > 8)
 +        list.resize(8);
++    if (keysOn) {
++        lv_obj_t *f = lv_group_get_focused(keyGroup);
++        envFocusNode = (f && lv_obj_get_parent(f) == envOvNearby) ? (uint32_t)(uintptr_t)lv_obj_get_user_data(f) : 0;
++    }
++    lv_obj_t *focusRow = nullptr;
 +    lv_obj_clean(envOvNearby);
 +    if (list.empty()) {
 +        lv_obj_t *l = label(envOvNearby, &F12, C_MUTED, "No other node has shared readings yet.");
 +        lv_obj_set_width(l, LV_PCT(100));
 +        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
++        keyScope();
 +        return;
 +    }
 +    for (const Node *n : list) {
 +        lv_obj_t *r = plain(envOvNearby);
++        stop(r);
++        if (n->num == envFocusNode)
++            focusRow = r;
 +        lv_obj_set_size(r, LV_PCT(100), 26);
 +        row(r, 6);
 +        lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
@@ -6261,6 +6595,8 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +    }
++    if (keysOn && !lv_obj_has_flag(envOv, LV_OBJ_FLAG_HIDDEN))
++        keyScope(focusRow);
 +}
 +
 +// ================================================================= SETTINGS
@@ -6279,9 +6615,12 @@ index 0000000..d18a80e
 +    lv_obj_t *cd = card(body, "DISPLAY");
 +    lv_obj_t *r = settingsRow(cd, "Color theme");
 +    setThemeDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setThemeDd, LV_PCT(100));
-+    lv_dropdown_set_options(setThemeDd, "Midnight (dark)\nDaylight (sunlight)\nNight Red (night vision)\nAmber terminal");
++    ctlWidth(setThemeDd);
++    // landscape: the dropdown sits beside its label, so the long names lose their explanation
++    lv_dropdown_set_options(setThemeDd, LAND ? "Midnight (dark)\nDaylight (sunlight)\nNight Red\nAmber terminal"
++                                             : "Midnight (dark)\nDaylight (sunlight)\nNight Red (night vision)\nAmber terminal");
 +    styleDropdown(setThemeDd);
++    stop(setThemeDd);
 +    lv_obj_add_event_cb(
 +        setThemeDd,
 +        [](lv_event_t *e) {
@@ -6299,12 +6638,13 @@ index 0000000..d18a80e
 +
 +    r = settingsRow(cd, "Brightness");
 +    setBright = lv_slider_create(r);
-+    lv_obj_set_width(setBright, LV_PCT(94));
++    lv_obj_set_width(setBright, LAND ? LV_PCT(60) : LV_PCT(94));
 +    lv_obj_set_style_margin_hor(setBright, 6, 0);
 +    lv_slider_set_range(setBright, 10, 255);
 +    lv_obj_set_style_bg_color(setBright, C_CARD2, LV_PART_MAIN);
 +    lv_obj_set_style_bg_color(setBright, C_CYAN, LV_PART_INDICATOR);
 +    lv_obj_set_style_bg_color(setBright, C_TEXT, LV_PART_KNOB);
++    stop(setBright);
 +    lv_obj_add_event_cb(
 +        setBright,
 +        [](lv_event_t *e) {
@@ -6316,12 +6656,25 @@ index 0000000..d18a80e
 +                ui->cbs.setBrightness(ui->brightness);
 +        },
 +        LV_EVENT_RELEASED, this);
++    // keys and the trackball change the value without a press / release, so apply each step
++    lv_obj_add_event_cb(
++        setBright,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading || lv_obj_has_state(ui->setBright, LV_STATE_PRESSED))
++                return; // a finger drag applies on release
++            ui->brightness = (uint8_t)lv_slider_get_value(ui->setBright);
++            if (ui->cbs.setBrightness)
++                ui->cbs.setBrightness(ui->brightness);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
 +
 +    r = settingsRow(cd, "Screen off after");
 +    setTimeout = lv_dropdown_create(r);
-+    lv_obj_set_width(setTimeout, LV_PCT(100));
++    ctlWidth(setTimeout);
 +    lv_dropdown_set_options(setTimeout, TIMEOUT_OPTS);
 +    styleDropdown(setTimeout);
++    stop(setTimeout);
 +    lv_obj_add_event_cb(
 +        setTimeout,
 +        [](lv_event_t *e) {
@@ -6340,6 +6693,7 @@ index 0000000..d18a80e
 +    lv_obj_t *bl = label(br, &F14, C_TEXT, "Message pop-ups");
 +    lv_obj_set_flex_grow(bl, 1);
 +    setBanner = lv_switch_create(br);
++    stop(setBanner);
 +    lv_obj_set_style_bg_color(setBanner, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    lv_obj_add_event_cb(
 +        setBanner,
@@ -6356,7 +6710,7 @@ index 0000000..d18a80e
 +    // message sound: picking one plays it once on the buzzer
 +    r = settingsRow(cd, "Message sound (plays a sample)");
 +    setToneDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setToneDd, LV_PCT(100));
++    ctlWidth(setToneDd);
 +    {
 +        std::string opts;
 +        for (int i = 0; i < kToneCount; i++) {
@@ -6367,6 +6721,7 @@ index 0000000..d18a80e
 +        lv_dropdown_set_options(setToneDd, opts.c_str());
 +    }
 +    styleDropdown(setToneDd);
++    stop(setToneDd);
 +    lv_obj_add_event_cb(
 +        setToneDd,
 +        [](lv_event_t *e) {
@@ -6387,24 +6742,29 @@ index 0000000..d18a80e
 +    lv_obj_t *cs = card(body, "SENSORS");
 +    r = settingsRow(cs, "Temperature");
 +    setEnvTempDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setEnvTempDd, LV_PCT(100));
++    ctlWidth(setEnvTempDd);
 +    lv_dropdown_set_options(setEnvTempDd, "\xC2\xB0" "F  Fahrenheit\n" "\xC2\xB0" "C  Celsius");
 +    styleDropdown(setEnvTempDd);
++    stop(setEnvTempDd);
 +    r = settingsRow(cs, "Pressure");
 +    setEnvPressDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setEnvPressDd, LV_PCT(100));
-+    lv_dropdown_set_options(setEnvPressDd, "inHg  inches of mercury\nhPa  hectopascals (mbar)");
++    ctlWidth(setEnvPressDd);
++    lv_dropdown_set_options(setEnvPressDd, LAND ? "inHg  (inches)\nhPa  (millibars)" : "inHg  inches of mercury\nhPa  hectopascals (mbar)");
 +    styleDropdown(setEnvPressDd);
++    stop(setEnvPressDd);
 +    r = settingsRow(cs, "Temperature correction");
 +    {
 +        lv_obj_t *cr = plain(r);
-+        lv_obj_set_size(cr, LV_PCT(100), 36);
++        ctlWidth(cr);
++        lv_obj_set_height(cr, 36);
 +        row(cr, 6);
 +        lv_obj_t *minus = flatButton(cr, LV_SYMBOL_MINUS, C_CYAN, 52, 34);
++        stop(minus);
 +        setEnvCorr = label(cr, &F16, C_TEXT, "None");
 +        lv_obj_set_flex_grow(setEnvCorr, 1);
 +        lv_obj_set_style_text_align(setEnvCorr, LV_TEXT_ALIGN_CENTER, 0);
 +        lv_obj_t *plus = flatButton(cr, LV_SYMBOL_PLUS, C_CYAN, 52, 34);
++        stop(plus);
 +        lv_obj_add_event_cb(
 +            minus, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->stepEnvCorr(-1); }, LV_EVENT_CLICKED, this);
 +        lv_obj_add_event_cb(
@@ -6437,13 +6797,16 @@ index 0000000..d18a80e
 +    lv_obj_set_flex_grow(esl, 1);
 +    oneLine(esl);
 +    setEnvShareSw = lv_switch_create(esr);
++    stop(setEnvShareSw);
 +    lv_obj_set_style_bg_color(setEnvShareSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    r = settingsRow(cs, "Share every");
 +    setEnvEveryDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setEnvEveryDd, LV_PCT(100));
++    ctlWidth(setEnvEveryDd);
 +    lv_dropdown_set_options(setEnvEveryDd, ENV_SHARE_OPTS);
 +    styleDropdown(setEnvEveryDd);
++    stop(setEnvEveryDd);
 +    lv_obj_t *esave = flatButton(cs, LV_SYMBOL_SAVE " Save sharing & restart", C_CYAN, LV_PCT(100), 34);
++    stop(esave);
 +    // two-tap confirm: saving telemetry settings restarts the radio
 +    lv_obj_add_event_cb(
 +        esave,
@@ -6452,7 +6815,7 @@ index 0000000..d18a80e
 +            lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
 +            if (!lv_obj_has_state(b, LV_STATE_USER_1)) {
 +                lv_obj_add_state(b, LV_STATE_USER_1);
-+                setButtonText(b, "Tap again to restart");
++                setButtonText(b, ui->touchInput ? "Tap again to restart" : "Press again to restart");
 +                lv_timer_t *t = lv_timer_create(
 +                    [](lv_timer_t *t) {
 +                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
@@ -6485,14 +6848,16 @@ index 0000000..d18a80e
 +    setShort = lv_textarea_create(r);
 +    lv_textarea_set_one_line(setShort, true);
 +    lv_textarea_set_max_length(setShort, 4);
-+    lv_obj_set_width(setShort, LV_PCT(100));
++    ctlWidth(setShort);
 +    styleTextarea(setShort);
++    stop(setShort);
 +    r = settingsRow(ci, "Long name");
 +    setLong = lv_textarea_create(r);
 +    lv_textarea_set_one_line(setLong, true);
 +    lv_textarea_set_max_length(setLong, 39);
-+    lv_obj_set_width(setLong, LV_PCT(100));
++    ctlWidth(setLong);
 +    styleTextarea(setLong);
++    stop(setLong);
 +    for (lv_obj_t *ta : {setShort, setLong}) {
 +        lv_obj_add_event_cb(
 +            ta,
@@ -6502,9 +6867,16 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        lv_obj_add_event_cb(
-+            ta, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->hideKeyboard(); }, LV_EVENT_READY, this);
++            ta,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                ui->hideKeyboard();
++                ui->keyNext();
++            },
++            LV_EVENT_READY, this);
 +    }
 +    lv_obj_t *save = flatButton(ci, LV_SYMBOL_SAVE " Save names", C_CYAN, LV_PCT(100), 34);
++    stop(save);
 +    lv_obj_add_event_cb(
 +        save,
 +        [](lv_event_t *e) {
@@ -6526,24 +6898,28 @@ index 0000000..d18a80e
 +    lv_obj_t *cr = card(body, "RADIO  -  changes reboot the node");
 +    r = settingsRow(cr, "Region");
 +    setRegionDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setRegionDd, LV_PCT(100));
++    ctlWidth(setRegionDd);
 +    lv_dropdown_set_options(setRegionDd, optString(REGIONS).c_str());
 +    styleDropdown(setRegionDd);
++    stop(setRegionDd);
 +    r = settingsRow(cr, "Modem preset");
 +    setPresetDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setPresetDd, LV_PCT(100));
++    ctlWidth(setPresetDd);
 +    lv_dropdown_set_options(setPresetDd, optString(PRESETS).c_str());
 +    styleDropdown(setPresetDd);
++    stop(setPresetDd);
 +    r = settingsRow(cr, "Device role");
 +    setRoleDd = lv_dropdown_create(r);
-+    lv_obj_set_width(setRoleDd, LV_PCT(100));
++    ctlWidth(setRoleDd);
 +    lv_dropdown_set_options(setRoleDd, optString(ROLES).c_str());
 +    styleDropdown(setRoleDd);
++    stop(setRoleDd);
 +    setLnaRow = settingsRow(cr, "Receive LNA (front-end amplifier)");
 +    setLnaDd = lv_dropdown_create(setLnaRow);
-+    lv_obj_set_width(setLnaDd, LV_PCT(100));
-+    lv_dropdown_set_options(setLnaDd, "Auto (recommended)\nOn\nOff (bypass)");
++    ctlWidth(setLnaDd);
++    lv_dropdown_set_options(setLnaDd, LAND ? "Auto (best)\nOn\nOff (bypass)" : "Auto (recommended)\nOn\nOff (bypass)");
 +    styleDropdown(setLnaDd);
++    stop(setLnaDd);
 +    lv_obj_add_event_cb(
 +        setLnaDd,
 +        [](lv_event_t *e) {
@@ -6602,6 +6978,30 @@ index 0000000..d18a80e
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
 +
++    // GPS receiver: only once the radio has said what its GPS is (see setGpsMode)
++    setGpsRow = plain(cr);
++    lv_obj_set_size(setGpsRow, LV_PCT(100), 30);
++    row(setGpsRow, 6);
++    lv_obj_t *gl = label(setGpsRow, &F14, C_TEXT, LV_SYMBOL_GPS " GPS");
++    lv_obj_set_flex_grow(gl, 1);
++    oneLine(gl);
++    setGpsSw = lv_switch_create(setGpsRow);
++    stop(setGpsSw);
++    lv_obj_set_style_bg_color(setGpsSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    lv_obj_add_event_cb(
++        setGpsSw,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            bool on = lv_obj_has_state(ui->setGpsSw, LV_STATE_CHECKED);
++            if (ui->cbs.setGps)
++                ui->cbs.setGps(on);
++            ui->showToast(on ? LV_SYMBOL_GPS " GPS on - restarting" : LV_SYMBOL_GPS " GPS off - restarting", 5000);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++    lv_obj_add_flag(setGpsRow, LV_OBJ_FLAG_HIDDEN);
++
 +    // wi-fi
 +    lv_obj_t *cwf = card(body, "WI-FI");
 +    lv_obj_t *wfr = plain(cwf);
@@ -6611,20 +7011,23 @@ index 0000000..d18a80e
 +    lv_obj_set_flex_grow(wfl, 1);
 +    oneLine(wfl);
 +    setWifiSw = lv_switch_create(wfr);
++    stop(setWifiSw);
 +    lv_obj_set_style_bg_color(setWifiSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    r = settingsRow(cwf, "Network name");
 +    setSsid = lv_textarea_create(r);
 +    lv_textarea_set_one_line(setSsid, true);
 +    lv_textarea_set_max_length(setSsid, 32);
-+    lv_obj_set_width(setSsid, LV_PCT(100));
++    ctlWidth(setSsid);
 +    styleTextarea(setSsid);
++    stop(setSsid);
 +    r = settingsRow(cwf, "Password");
 +    setPsk = lv_textarea_create(r);
 +    lv_textarea_set_one_line(setPsk, true);
 +    lv_textarea_set_max_length(setPsk, 64);
 +    lv_textarea_set_password_mode(setPsk, true);
-+    lv_obj_set_width(setPsk, LV_PCT(100));
++    ctlWidth(setPsk);
 +    styleTextarea(setPsk);
++    stop(setPsk);
 +    for (lv_obj_t *ta : {setSsid, setPsk}) {
 +        lv_obj_add_event_cb(
 +            ta,
@@ -6634,9 +7037,16 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        lv_obj_add_event_cb(
-+            ta, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->hideKeyboard(); }, LV_EVENT_READY, this);
++            ta,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                ui->hideKeyboard();
++                ui->keyNext();
++            },
++            LV_EVENT_READY, this);
 +    }
 +    lv_obj_t *wsave = flatButton(cwf, LV_SYMBOL_SAVE " Save & restart", C_CYAN, LV_PCT(100), 34);
++    stop(wsave);
 +    // two-tap confirm, like Reboot: saving restarts the radio
 +    lv_obj_add_event_cb(
 +        wsave,
@@ -6653,7 +7063,7 @@ index 0000000..d18a80e
 +            }
 +            if (!lv_obj_has_state(b, LV_STATE_USER_1)) {
 +                lv_obj_add_state(b, LV_STATE_USER_1);
-+                setButtonText(b, "Tap again to restart");
++                setButtonText(b, ui->touchInput ? "Tap again to restart" : "Press again to restart");
 +                lv_timer_t *t = lv_timer_create(
 +                    [](lv_timer_t *t) {
 +                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
@@ -6687,6 +7097,7 @@ index 0000000..d18a80e
 +    lv_obj_set_flex_grow(ml, 1);
 +    oneLine(ml);
 +    setMapSw = lv_switch_create(mr);
++    stop(setMapSw);
 +    lv_obj_set_style_bg_color(setMapSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    lv_obj_add_event_cb(
 +        setMapSw,
@@ -6706,6 +7117,7 @@ index 0000000..d18a80e
 +    lv_obj_set_flex_grow(setMapInfo, 1);
 +    oneLine(setMapInfo);
 +    lv_obj_t *mclr = flatButton(mr2, LV_SYMBOL_TRASH " Clear", C_AMBER, 80, 30);
++    stop(mclr);
 +    // two-tap confirm: first tap arms the button for 3 s
 +    lv_obj_add_event_cb(
 +        mclr,
@@ -6749,6 +7161,7 @@ index 0000000..d18a80e
 +    // Hoptics firmware keeps this screen running with Bluetooth on (the screen has its own packet queue),
 +    // so this is a plain switch; the radio restarts to apply it
 +    setBt = lv_switch_create(btr);
++    stop(setBt);
 +    lv_obj_set_style_bg_color(setBt, C_BLUE, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    lv_obj_add_event_cb(
 +        setBt,
@@ -6778,6 +7191,7 @@ index 0000000..d18a80e
 +    lv_obj_t *wl = label(wr, &F14, C_TEXT, "Show channel chat on web");
 +    lv_obj_set_flex_grow(wl, 1);
 +    setWebChatSw = lv_switch_create(wr);
++    stop(setWebChatSw);
 +    lv_obj_set_style_bg_color(setWebChatSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
 +    lv_obj_add_event_cb(
 +        setWebChatSw,
@@ -6806,6 +7220,8 @@ index 0000000..d18a80e
 +    int32_t bw = (W() - 2 * PAD - 16 - PAD) / 2;
 +    lv_obj_t *rb = flatButton(acts, LV_SYMBOL_REFRESH " Reboot", C_AMBER, bw, 36);
 +    setShutdownBtn = flatButton(acts, LV_SYMBOL_POWER " Off", C_RED, bw, 36);
++    stop(rb);
++    stop(setShutdownBtn);
 +    // two-tap confirm: first tap arms the button for 3 s
 +    lv_obj_add_event_cb(
 +        rb,
@@ -6819,7 +7235,7 @@ index 0000000..d18a80e
 +                return;
 +            }
 +            lv_obj_add_state(b, LV_STATE_USER_1);
-+            setButtonText(b, "Tap again");
++            setButtonText(b, ui->touchInput ? "Tap again" : "Press again");
 +            lv_timer_t *t = lv_timer_create(
 +                [](lv_timer_t *t) {
 +                    lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
@@ -6842,7 +7258,7 @@ index 0000000..d18a80e
 +                return;
 +            }
 +            lv_obj_add_state(b, LV_STATE_USER_1);
-+            setButtonText(b, "Tap again");
++            setButtonText(b, ui->touchInput ? "Tap again" : "Press again");
 +            lv_timer_t *t = lv_timer_create(
 +                [](lv_timer_t *t) {
 +                    lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
@@ -6855,12 +7271,14 @@ index 0000000..d18a80e
 +        LV_EVENT_CLICKED, this);
 +
 +    lv_obj_t *repBtn = flatButton(cdv, LV_SYMBOL_WARNING " Report a problem", C_CYAN, W() - 2 * PAD - 16, 36);
++    stop(repBtn);
 +    lv_obj_add_event_cb(
 +        repBtn, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openReport(false); }, LV_EVENT_CLICKED, this);
 +
 +    // support the project: scan with a phone (the radio has no browser)
 +    {
 +        lv_obj_t *csu = card(body, "SUPPORT THE PROJECT");
++        stop(csu); // read-only: lets keys scroll down to it
 +        lv_obj_t *sr = plain(csu);
 +        lv_obj_set_size(sr, LV_PCT(100), LV_SIZE_CONTENT);
 +        row(sr, 10);
@@ -6947,7 +7365,17 @@ index 0000000..d18a80e
 +        lv_obj_remove_state(setWifiSw, LV_STATE_CHECKED);
 +    lv_textarea_set_text(setSsid, wifiSsid);
 +    lv_textarea_set_text(setPsk, "");
-+    lv_textarea_set_placeholder_text(setPsk, wifiHasPsk ? "saved - blank keeps it" : "network password");
++    lv_textarea_set_placeholder_text(setPsk, wifiHasPsk ? (LAND ? "saved - blank keeps" : "saved - blank keeps it") : "network password");
++    // GPS switch: boards known to have a receiver always; others only when one is configured
++    if (gpsMode < 0 || (gpsMode == 2 && !hoptics::board::kGps)) {
++        lv_obj_add_flag(setGpsRow, LV_OBJ_FLAG_HIDDEN);
++    } else {
++        lv_obj_remove_flag(setGpsRow, LV_OBJ_FLAG_HIDDEN);
++        if (gpsMode == 1)
++            lv_obj_add_state(setGpsSw, LV_STATE_CHECKED);
++        else
++            lv_obj_remove_state(setGpsSw, LV_STATE_CHECKED);
++    }
 +    if (lnaMode == 2) {
 +        lv_obj_add_flag(setLnaRow, LV_OBJ_FLAG_HIDDEN); // no controllable LNA on this board
 +    } else {
@@ -6991,12 +7419,14 @@ index 0000000..d18a80e
 +    lv_obj_remove_flag(setOv, LV_OBJ_FLAG_HIDDEN);
 +    lv_obj_move_to_index(setOv, -1);
 +    lv_obj_move_to_index(toast, -1);
++    keyScope(setThemeDd); // the first setting, at the top
 +}
 +
 +void HopticsUI::closeSettings(void)
 +{
 +    hideKeyboard();
 +    lv_obj_add_flag(setOv, LV_OBJ_FLAG_HIDDEN);
++    keyScope();
 +}
 +
 +// ================================================================= KEYBOARD
@@ -7031,6 +7461,11 @@ index 0000000..d18a80e
 +
 +void HopticsUI::showKeyboard(lv_obj_t *ta)
 +{
++    if (keysOn && hasKeypad()) {
++        // a real keyboard types into the focused field: no on-screen keyboard over the screen
++        keyScope(ta);
++        return;
++    }
 +    kbTarget = ta;
 +    lv_keyboard_set_textarea(keyboard, ta);
 +    lv_obj_remove_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -7048,6 +7483,7 @@ index 0000000..d18a80e
 +    } else {
 +        lv_obj_scroll_to_view_recursive(ta, LV_ANIM_ON);
 +    }
++    keyScope(); // trackball-only boards type on the on-screen keyboard
 +}
 +
 +void HopticsUI::hideKeyboard(void)
@@ -7058,11 +7494,13 @@ index 0000000..d18a80e
 +    lv_keyboard_set_textarea(keyboard, nullptr);
 +    if (kbTarget)
 +        lv_obj_remove_state(kbTarget, LV_STATE_FOCUSED);
++    lv_obj_t *kbTargetWas = kbTarget;
 +    kbTarget = nullptr;
 +    lv_obj_set_height(chatOv, H());
 +    lv_obj_set_height(setOv, H());
 +    if (wizOv)
 +        lv_obj_set_height(wizOv, H());
++    keyScope(kbTargetWas);
 +}
 +
 +// ================================================================= TOAST
@@ -7383,6 +7821,11 @@ index 0000000..d18a80e
 +    lnaMode = mode;
 +}
 +
++void HopticsUI::setGpsMode(int mode)
++{
++    gpsMode = mode;
++}
++
 +void HopticsUI::setBluetoothEnabled(bool on, uint32_t fixedPin)
 +{
 +    bluetoothOn = on;
@@ -7470,6 +7913,8 @@ index 0000000..d18a80e
 +    if (!mainScreen)
 +        return;
 +    refreshStatusBar();
++    if (!keysOn)
++        inputDevicesChanged(); // a keyboard or trackball that came up after the screen was built
 +
 +    // overlays first
 +    if (!lv_obj_has_flag(nodeOv, LV_OBJ_FLAG_HIDDEN)) {
@@ -7647,29 +8092,13 @@ index 0000000..d18a80e
 +    for (auto &b : btns) {
 +        lv_obj_t *o = flatButton(bar, b.t, C_CYAN, b.id == 0 ? 56 : 34, 24);
 +        lv_obj_set_user_data(o, (void *)(intptr_t)b.id);
++        stop(o);
 +        lv_obj_add_event_cb(
 +            o,
 +            [](lv_event_t *e) {
 +                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
 +                int id = (int)(intptr_t)lv_obj_get_user_data((lv_obj_t *)lv_event_get_current_target(e));
-+                if (id == 0) {
-+                    ui->mapUserZoom = false;
-+                    ui->mapUserPan = false;
-+                    ui->mapFit();
-+                } else {
-+                    // whole zoom steps keep the tiles pixel-sharp; zoom about the middle of the view
-+                    int nz = std::max(HOPTICS_MAP_MIN_ZOOM, std::min(HOPTICS_MAP_MAX_ZOOM, ui->mapZ + (id == 2 ? 1 : -1)));
-+                    if (nz > ui->mapZ) {
-+                        ui->mapCX *= 2;
-+                        ui->mapCY *= 2;
-+                    } else if (nz < ui->mapZ) {
-+                        ui->mapCX /= 2;
-+                        ui->mapCY /= 2;
-+                    }
-+                    ui->mapZ = nz;
-+                    ui->mapUserZoom = true;
-+                }
-+                ui->refreshMap();
++                ui->mapZoom(id == 0 ? 0 : id == 2 ? 1 : -1);
 +            },
 +            LV_EVENT_CLICKED, this);
 +    }
@@ -7693,6 +8122,16 @@ index 0000000..d18a80e
 +    lv_obj_add_flag(mapArea, LV_OBJ_FLAG_CLICKABLE);
 +    lv_obj_add_event_cb(
 +        mapArea, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->mapTouch(e); }, LV_EVENT_ALL, this);
++    // keys: Enter on the focused map starts / stops panning with the arrows or trackball
++    stop(mapArea);
++    lv_obj_add_event_cb(
++        mapArea,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (isKeyIndev(lv_indev_active()))
++                ui->setMapPan(!ui->mapPan);
++        },
++        LV_EVENT_CLICKED, this);
 +
 +    // everything that moves with the map sits on one layer, so a drag is a single position change
 +    mapLayer = plain(mapArea);
@@ -7791,6 +8230,29 @@ index 0000000..d18a80e
 +    pill(mapNote);
 +    lv_obj_align(mapNote, LV_ALIGN_TOP_LEFT, 4, 4);
 +    lv_obj_add_flag(mapNote, LV_OBJ_FLAG_HIDDEN);
++    mapPan = false;
++}
++
++void HopticsUI::mapZoom(int dir)
++{
++    if (dir == 0) {
++        mapUserZoom = false;
++        mapUserPan = false;
++        mapFit();
++    } else {
++        // whole zoom steps keep the tiles pixel-sharp; zoom about the middle of the view
++        int nz = std::max(HOPTICS_MAP_MIN_ZOOM, std::min(HOPTICS_MAP_MAX_ZOOM, mapZ + dir));
++        if (nz > mapZ) {
++            mapCX *= 2;
++            mapCY *= 2;
++        } else if (nz < mapZ) {
++            mapCX /= 2;
++            mapCY /= 2;
++        }
++        mapZ = nz;
++        mapUserZoom = true;
++    }
++    refreshMap();
 +}
 +
 +void HopticsUI::mapTouch(lv_event_t *e)
@@ -7799,8 +8261,8 @@ index 0000000..d18a80e
 +    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING && code != LV_EVENT_RELEASED && code != LV_EVENT_PRESS_LOST)
 +        return;
 +    lv_indev_t *indev = lv_indev_active();
-+    if (!indev)
-+        return;
++    if (!indev || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER)
++        return; // a finger drag; keys pan with mapPanKey()
 +    lv_point_t pt;
 +    lv_indev_get_point(indev, &pt);
 +    switch (code) {
@@ -8138,7 +8600,10 @@ index 0000000..d18a80e
 +        lv_obj_add_flag(mapEmpty, LV_OBJ_FLAG_HIDDEN);
 +
 +    char b[64];
-+    if (!meOn && !pos.empty())
++    lv_obj_set_style_text_color(mapRange, mapPan ? C_AMBER : C_MUTED, 0);
++    if (mapPan)
++        snprintf(b, sizeof(b), LV_SYMBOL_GPS " moving - Enter ends");
++    else if (!meOn && !pos.empty())
 +        snprintf(b, sizeof(b), "no GPS fix - centred on mesh");
 +    else if (offscreen)
 +        snprintf(b, sizeof(b), "%d here, %d off map", shown, offscreen);
@@ -8461,8 +8926,8 @@ index 0000000..d18a80e
 +    lv_obj_set_size(wizOv, W(), H());
 +    lv_obj_set_style_bg_color(wizOv, C_BG, 0);
 +    lv_obj_set_style_bg_opa(wizOv, LV_OPA_COVER, 0);
-+    lv_obj_set_style_pad_all(wizOv, 12, 0);
-+    column(wizOv, 8);
++    lv_obj_set_style_pad_all(wizOv, LAND ? 10 : 12, 0);
++    column(wizOv, LAND ? 6 : 8);
 +    lv_obj_add_flag(wizOv, LV_OBJ_FLAG_HIDDEN);
 +
 +    lv_obj_t *hdr = plain(wizOv);
@@ -8475,13 +8940,15 @@ index 0000000..d18a80e
 +    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
 +    lv_obj_t *t = label(hdr, &F16, C_TEXT, "Welcome to Hoptics MT");
 +    lv_obj_set_flex_grow(t, 1);
-+    wizDots = label(wizOv, FSMALL, C_MUTED, "");
++    wizDots = label(LAND ? hdr : wizOv, FSMALL, C_MUTED, ""); // landscape: step counter at the end of the title line
 +
 +    // page 1: region
 +    wizPages[0] = plain(wizOv);
 +    lv_obj_set_width(wizPages[0], LV_PCT(100));
 +    lv_obj_set_flex_grow(wizPages[0], 1);
-+    column(wizPages[0], 8);
++    if (LAND)
++        lv_obj_add_flag(wizPages[0], LV_OBJ_FLAG_SCROLLABLE);
++    column(wizPages[0], LAND ? 6 : 8);
 +    lv_obj_t *l = label(wizPages[0], &F20, C_TEXT, "Where are you?");
 +    l = label(wizPages[0], &F12, C_MUTED,
 +              "Pick your LoRa region. It sets the legal frequencies, and the radio stays silent until it's set.");
@@ -8492,6 +8959,7 @@ index 0000000..d18a80e
 +    lv_dropdown_set_options(wizRegion, optString(REGIONS).c_str());
 +    lv_dropdown_set_selected(wizRegion, optIndex(REGIONS, 1)); // US is the most common for these kits
 +    styleDropdown(wizRegion);
++    stop(wizRegion);
 +    l = label(wizPages[0], FSMALL, C_DIM, "US = United States (902-928 MHz)\nEU_868 = Europe   ANZ = Australia / NZ");
 +    lv_obj_set_width(l, LV_PCT(100));
 +
@@ -8499,6 +8967,8 @@ index 0000000..d18a80e
 +    wizPages[1] = plain(wizOv);
 +    lv_obj_set_width(wizPages[1], LV_PCT(100));
 +    lv_obj_set_flex_grow(wizPages[1], 1);
++    if (LAND)
++        lv_obj_add_flag(wizPages[1], LV_OBJ_FLAG_SCROLLABLE);
 +    column(wizPages[1], 6);
 +    label(wizPages[1], &F20, C_TEXT, "Name your node");
 +    label(wizPages[1], &F12, C_MUTED, "Long name");
@@ -8507,12 +8977,14 @@ index 0000000..d18a80e
 +    lv_textarea_set_max_length(wizLong, 39);
 +    lv_obj_set_width(wizLong, LV_PCT(100));
 +    styleTextarea(wizLong);
++    stop(wizLong);
 +    label(wizPages[1], &F12, C_MUTED, "Short name (max 4, shown on maps)");
 +    wizShort = lv_textarea_create(wizPages[1]);
 +    lv_textarea_set_one_line(wizShort, true);
 +    lv_textarea_set_max_length(wizShort, 4);
 +    lv_obj_set_width(wizShort, LV_PCT(100));
 +    styleTextarea(wizShort);
++    stop(wizShort);
 +    for (lv_obj_t *ta : {wizLong, wizShort}) {
 +        lv_obj_add_event_cb(
 +            ta,
@@ -8522,13 +8994,21 @@ index 0000000..d18a80e
 +            },
 +            LV_EVENT_CLICKED, this);
 +        lv_obj_add_event_cb(
-+            ta, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->hideKeyboard(); }, LV_EVENT_READY, this);
++            ta,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                ui->hideKeyboard();
++                ui->keyNext();
++            },
++            LV_EVENT_READY, this);
 +    }
 +
 +    // page 3: theme swatches
 +    wizPages[2] = plain(wizOv);
 +    lv_obj_set_width(wizPages[2], LV_PCT(100));
 +    lv_obj_set_flex_grow(wizPages[2], 1);
++    if (LAND)
++        lv_obj_add_flag(wizPages[2], LV_OBJ_FLAG_SCROLLABLE);
 +    lv_obj_set_flex_flow(wizPages[2], LV_FLEX_FLOW_ROW_WRAP);
 +    lv_obj_set_style_pad_row(wizPages[2], 8, 0);
 +    lv_obj_set_style_pad_column(wizPages[2], 8, 0);
@@ -8544,7 +9024,7 @@ index 0000000..d18a80e
 +    for (int i = 0; i < 4; i++) {
 +        lv_obj_t *b = lv_button_create(wizPages[2]);
 +        lv_obj_remove_style_all(b);
-+        lv_obj_set_size(b, (W() - 24 - 8) / 2, 62);
++        lv_obj_set_size(b, (W() - (LAND ? 20 : 24) - 8) / 2, LAND ? 50 : 62);
 +        lv_obj_set_style_radius(b, 10, 0);
 +        lv_obj_set_style_bg_color(b, lv_color_hex(sw[i].bg), 0);
 +        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
@@ -8557,10 +9037,12 @@ index 0000000..d18a80e
 +        lv_obj_set_style_radius(bar, 3, 0);
 +        lv_obj_set_style_bg_color(bar, lv_color_hex(sw[i].accent), 0);
 +        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-+        lv_obj_set_pos(bar, 10, 12);
++        lv_obj_set_pos(bar, 10, LAND ? 10 : 12);
 +        lv_obj_t *nl = label(b, &F14, lv_color_hex(sw[i].fg), sw[i].name);
-+        lv_obj_set_pos(nl, 10, 30);
++        lv_obj_set_pos(nl, 10, LAND ? 24 : 30);
 +        lv_obj_set_user_data(b, (void *)(intptr_t)i);
++        stop(b);
++        lv_obj_set_style_outline_color(b, lv_color_hex(sw[i].fg), LV_STATE_FOCUS_KEY); // the swatch's own text colour
 +        if (i == themeIdx)
 +            lv_obj_add_state(b, LV_STATE_CHECKED);
 +        lv_obj_add_event_cb(
@@ -8579,18 +9061,22 @@ index 0000000..d18a80e
 +
 +    // buttons
 +    lv_obj_t *bar = plain(wizOv);
-+    lv_obj_set_size(bar, LV_PCT(100), 40);
++    lv_obj_set_size(bar, LV_PCT(100), LAND ? 36 : 40);
 +    row(bar, 8);
-+    lv_obj_t *skip = flatButton(bar, "Skip", C_MUTED, 80, 38);
++    lv_obj_t *skip = flatButton(bar, "Skip", C_MUTED, 80, LAND ? 34 : 38);
 +    lv_obj_t *sp = plain(bar);
 +    lv_obj_set_flex_grow(sp, 1);
-+    wizNext = flatButton(bar, "Next " LV_SYMBOL_RIGHT, C_CYAN, 110, 38);
++    wizNext = flatButton(bar, "Next " LV_SYMBOL_RIGHT, C_CYAN, 110, LAND ? 34 : 38);
++    stop(wizNext);
++    stop(skip);
++    lv_obj_add_flag(skip, F_LAST); // keys reach Next before Skip
 +    lv_obj_add_event_cb(
 +        skip,
 +        [](lv_event_t *e) {
 +            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
 +            ui->hideKeyboard();
 +            lv_obj_add_flag(ui->wizOv, LV_OBJ_FLAG_HIDDEN);
++            ui->keyScope();
 +            ui->showToast(LV_SYMBOL_WARNING " Region not set - the radio stays silent. Set it in Settings.", 5000);
 +        },
 +        LV_EVENT_CLICKED, this);
@@ -8611,6 +9097,7 @@ index 0000000..d18a80e
 +    wizardStep(0);
 +    lv_obj_remove_flag(wizOv, LV_OBJ_FLAG_HIDDEN);
 +    lv_obj_move_to_index(wizOv, -1);
++    keyScope(wizRegion);
 +}
 +
 +void HopticsUI::wizardStep(int step)
@@ -8624,6 +9111,7 @@ index 0000000..d18a80e
 +            cbs.saveUser(sn, ln);
 +        int reg = REGIONS[lv_dropdown_get_selected(wizRegion)].value;
 +        lv_obj_add_flag(wizOv, LV_OBJ_FLAG_HIDDEN);
++        keyScope();
 +        if (cbs.setTheme)
 +            cbs.setTheme(wizTheme);
 +        if (reg != 0 && cbs.setRegion) {
@@ -8644,8 +9132,12 @@ index 0000000..d18a80e
 +            lv_obj_add_flag(wizPages[i], LV_OBJ_FLAG_HIDDEN);
 +    }
 +    static const char *dots[3] = {"STEP 1 OF 3  -  REGION", "STEP 2 OF 3  -  NAME", "STEP 3 OF 3  -  LOOK"};
-+    lv_label_set_text(wizDots, dots[step]);
++    static const char *shortDots[3] = {"STEP 1 OF 3", "STEP 2 OF 3", "STEP 3 OF 3"}; // landscape: on the title line
++    lv_label_set_text(wizDots, LAND ? shortDots[step] : dots[step]);
 +    setButtonText(wizNext, step == 2 ? LV_SYMBOL_OK " Finish" : "Next " LV_SYMBOL_RIGHT);
++    // keys start on the step's own control (on the look page: the swatch picked now)
++    lv_obj_t *first = step == 0 ? wizRegion : step == 1 ? wizLong : lv_obj_get_child(wizPages[2], 1 + wizTheme);
++    keyScope(first);
 +}
 +
 +// ================================================================= PROBLEM REPORTS
@@ -8658,53 +9150,84 @@ index 0000000..d18a80e
 +    lv_obj_t *body = plain(repOv);
 +    lv_obj_set_width(body, LV_PCT(100));
 +    lv_obj_set_flex_grow(body, 1);
-+    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
-+    lv_obj_set_scroll_dir(body, LV_DIR_VER);
-+    lv_obj_set_style_pad_bottom(body, PAD, 0);
-+    column(body, PAD);
++    // portrait: code on top, text under it, all scrolling. Landscape: the code needs the full screen height
++    // to keep 3 px squares (version 14 is 73 squares), so the header goes and the code fills the left side;
++    // back button, title and text share the narrow column on the right, which scrolls.
++    lv_obj_t *col = body;
++    if (LAND) {
++        lv_obj_add_flag(lv_obj_get_child(repOv, 0), LV_OBJ_FLAG_HIDDEN);
++        lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
++    } else {
++        lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
++        lv_obj_set_scroll_dir(body, LV_DIR_VER);
++        lv_obj_set_style_pad_bottom(body, PAD, 0);
++        column(body, PAD);
++    }
 +
 +    // the code itself: always black on white, full width, so phones read it in every theme
 +    lv_obj_t *qbox = plain(body);
-+    lv_obj_set_size(qbox, LV_PCT(100), W()); // square, so the code keeps a white margin on every side
++    lv_obj_set_size(qbox, LAND ? H() - 4 : LV_PCT(100), LAND ? H() : W()); // the code keeps a white margin all round
++    if (!LAND)
++        stop(qbox); // read-only stops: keys scroll from the code down to the text
 +    lv_obj_set_style_bg_color(qbox, lv_color_white(), 0);
 +    lv_obj_set_style_bg_opa(qbox, LV_OPA_COVER, 0);
 +    repQr = lv_qrcode_create(qbox);
-+    lv_qrcode_set_size(repQr, W() - 18); // 3 px squares up to version 14 (~360 bytes)
++    lv_qrcode_set_size(repQr, (LAND ? H() : W()) - 18); // 3 px squares up to version 14 (~360 bytes)
 +    lv_qrcode_set_dark_color(repQr, lv_color_black());
 +    lv_qrcode_set_light_color(repQr, lv_color_white());
 +    lv_obj_center(repQr);
++    if (LAND) {
++        col = plain(body);
++        lv_obj_set_height(col, LV_PCT(100));
++        lv_obj_set_flex_grow(col, 1);
++        lv_obj_add_flag(col, LV_OBJ_FLAG_SCROLLABLE);
++        lv_obj_set_scroll_dir(col, LV_DIR_VER);
++        lv_obj_set_style_pad_all(col, PAD, 0);
++        column(col, PAD);
++        lv_obj_t *back = flatButton(col, LV_SYMBOL_LEFT " Back", C_CYAN, LV_PCT(100), 30);
++        stop(back);
++        lv_obj_add_event_cb(
++            back, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeReport(); }, LV_EVENT_CLICKED, this);
++        repTitle = label(col, &F12, C_TEXT, "Report a problem");
++        lv_obj_set_width(repTitle, LV_PCT(100));
++        lv_label_set_long_mode(repTitle, LV_LABEL_LONG_MODE_WRAP);
++    }
++    repScroll = col;
 +
 +    // what happened, right under the code (only when there is a crash on record)
-+    repBanner = plain(body);
++    repBanner = plain(col);
 +    lv_obj_set_size(repBanner, LV_PCT(100), LV_SIZE_CONTENT);
 +    lv_obj_set_style_bg_color(repBanner, C_RED, 0);
 +    lv_obj_set_style_bg_opa(repBanner, LV_OPA_20, 0);
 +    lv_obj_set_style_border_side(repBanner, LV_BORDER_SIDE_LEFT, 0);
 +    lv_obj_set_style_border_width(repBanner, 4, 0);
 +    lv_obj_set_style_border_color(repBanner, C_RED, 0);
-+    lv_obj_set_style_pad_all(repBanner, 6, 0);
-+    lv_obj_set_style_pad_left(repBanner, 9, 0);
-+    repBannerText = label(repBanner, &F12, C_TEXT, "");
++    lv_obj_set_style_pad_all(repBanner, LAND ? 4 : 6, 0);
++    lv_obj_set_style_pad_left(repBanner, LAND ? 6 : 9, 0);
++    repBannerText = label(repBanner, LAND ? FSMALL : &F12, C_TEXT, ""); // landscape: the column is narrow
 +    lv_obj_set_width(repBannerText, LV_PCT(100));
 +    lv_label_set_long_mode(repBannerText, LV_LABEL_LONG_MODE_WRAP);
 +
-+    lv_obj_t *tb = plain(body);
++    lv_obj_t *tb = plain(col);
++    stop(tb);
 +    lv_obj_set_size(tb, LV_PCT(100), LV_SIZE_CONTENT);
-+    lv_obj_set_style_pad_hor(tb, PAD + 2, 0);
++    lv_obj_set_style_pad_hor(tb, LAND ? 0 : PAD + 2, 0);
 +    column(tb, PAD);
-+    lv_obj_t *how = label(tb, &F12, C_TEXT,
++    lv_obj_t *how = label(tb, LAND ? FSMALL : &F12, C_TEXT,
 +                          "Point your phone camera at the code. It opens a bug report on GitHub with these details "
 +                          "filled in. Add what you were doing, then submit.");
 +    lv_obj_set_width(how, LV_PCT(100));
 +    lv_label_set_long_mode(how, LV_LABEL_LONG_MODE_WRAP);
-+    lv_obj_t *alt = label(tb, &F12, C_MUTED,
++    lv_obj_t *alt = label(tb, LAND ? FSMALL : &F12, C_MUTED,
 +                          "No GitHub account? Take a photo of this screen and send it to whoever gave you the firmware.");
 +    lv_obj_set_width(alt, LV_PCT(100));
 +    lv_label_set_long_mode(alt, LV_LABEL_LONG_MODE_WRAP);
 +    repText = label(tb, FSMALL, C_MUTED, "");
 +    lv_obj_set_width(repText, LV_PCT(100));
 +    lv_label_set_long_mode(repText, LV_LABEL_LONG_MODE_WRAP);
-+    repClearBtn = flatButton(tb, LV_SYMBOL_TRASH " Clear crash record", C_AMBER, W() - 2 * PAD - 4, 34);
++    repClearBtn = flatButton(tb, LAND ? LV_SYMBOL_TRASH " Clear" : LV_SYMBOL_TRASH " Clear crash record", C_AMBER,
++                             LAND ? LV_PCT(100) : W() - 2 * PAD - 4, 34);
++    stop(repClearBtn);
 +    lv_obj_add_event_cb(
 +        repClearBtn,
 +        [](lv_event_t *e) {
@@ -8759,10 +9282,12 @@ index 0000000..d18a80e
 +    // same details as in the code, so a photo of the screen carries them too
 +    lv_label_set_text(repText, details.c_str());
 +
-+    lv_obj_scroll_to_y(lv_obj_get_child(repOv, 1), 0, LV_ANIM_OFF);
++    lv_obj_scroll_to_y(repScroll, 0, LV_ANIM_OFF);
 +    lv_obj_remove_flag(repOv, LV_OBJ_FLAG_HIDDEN);
 +    lv_obj_move_to_index(repOv, -1);
 +    lv_obj_move_to_index(toast, -1);
++    // start at the top; not on a button, so a stray Enter does nothing
++    keyScope(LAND ? lv_obj_get_child(repScroll, (int32_t)lv_obj_get_child_count(repScroll) - 1) : lv_obj_get_child(repScroll, 0));
 +}
 +
 +void HopticsUI::closeReport(void)
@@ -8772,6 +9297,7 @@ index 0000000..d18a80e
 +    if (repCrash)
 +        hoptics::Report::get().ackFresh();
 +    repCrash = false;
++    keyScope();
 +}
 +
 +void HopticsUI::showCrashReportIfAny(void)
@@ -8783,12 +9309,512 @@ index 0000000..d18a80e
 +    crashShown = true;
 +    openReport(true);
 +}
++
++// ================================================================= KEYS
++// Keyboard and trackball navigation: T-Deck Plus (keyboard + trackball), ThinkNode M9 (keyboard), and any
++// board with an LVGL keypad or encoder input device. Everything a finger can do, keys can do.
++//
++// What Hoptics does with the LVGL keys it receives:
++//   NEXT / PREV ............ next / previous control (LVGL moves the focus; the M9 input policy sends
++//                            these for DOWN / UP unless setKeyContext says otherwise)
++//   UP / DOWN .............. previous / next control; scroll a focused message list; move in an open list
++//   LEFT / RIGHT ........... main screen: previous / next tab. On a screen on top (chat, node, settings...):
++//                            LEFT goes back; in the setup wizard LEFT / RIGHT step back / forward.
++//                            Text fields move the cursor, sliders change, a panning map moves.
++//   ENTER .................. press the focused control (open a row, toggle a switch, open a list, send)
++//   ESC, BACKSPACE outside a text field ... back: close the screen on top, or go to Home
++//   letters on the main screen: h l m c n s = Home Live Map Chat Nodes Stats; in a chat: start typing
++// Encoders (the T-Deck trackball): turning (trackball up/down) moves the focus, press is ENTER. The stock
++// T-Deck trackball driver sends left/right as LV_KEY_DOWN / LV_KEY_UP keys, so from an encoder those two
++// mean LEFT / RIGHT here. Lists, sliders, text fields and the message list use LVGL's edit mode (press,
++// turn, press again); in the message field that second press sends.
++// Map: focus it and press ENTER to pan (arrows / trackball; + and - zoom); ENTER or ESC stops.
++// Dedicated keys (M9 Home / Chat / Map / Preset) arrive through keyCommand().
++//
++// The group only ever holds the controls of what is on top (keyScope), so focus can't wander behind an
++// overlay. Focus shows as a ring in the theme's text colour in LV_STATE_FOCUS_KEY, which LVGL sets only
++// when a keypad or encoder moved the focus, so touch never shows it; amber while editing (applyFocusStyles).
++bool HopticsUI::hasKeypad(void) const
++{
++    return anyIndev(LV_INDEV_TYPE_KEYPAD);
++}
++
++void HopticsUI::keysInit(void)
++{
++    bool keys = false;
++    for (lv_indev_t *in = lv_indev_get_next(nullptr); in; in = lv_indev_get_next(in))
++        keys |= isKeyIndev(in);
++    touchInput = !keys || anyIndev(LV_INDEV_TYPE_POINTER);
++    if (!keys)
++        return; // touch only: LVGL's group handling stays exactly as it was
++    if (!keysOn) {
++        keysOn = true;
++        keyGroup = lv_group_get_default(); // the input drivers usually made it already
++        if (!keyGroup) {
++            keyGroup = lv_group_create();
++            lv_group_set_default(keyGroup);
++        }
++        lv_group_set_wrap(keyGroup, true);
++        lv_group_set_user_data(keyGroup, this);
++        lv_group_set_focus_cb(keyGroup, [](lv_group_t *g) { ((HopticsUI *)lv_group_get_user_data(g))->updateKeyContext(); });
++    }
++    applyFocusStyles();
++    attachKeyInputs();
++}
++
++void HopticsUI::attachKeyInputs(void)
++{
++    for (lv_indev_t *in = lv_indev_get_next(nullptr); in; in = lv_indev_get_next(in)) {
++        // whatever order the input drivers and the UI start in, every keypad and encoder ends up on our group
++        if (isKeyIndev(in) && lv_indev_get_group(in) != keyGroup)
++            lv_indev_set_group(in, keyGroup);
++        // a touch (T-Deck Plus) means keys are not in use any more: the ring goes until the next key
++        if (lv_indev_get_type(in) == LV_INDEV_TYPE_POINTER && std::find(touchHooked.begin(), touchHooked.end(), in) == touchHooked.end()) {
++            touchHooked.push_back(in);
++            lv_indev_add_event_cb(
++                in,
++                [](lv_event_t *e) {
++                    HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                    ui->keyActive = false;
++                    if (lv_obj_t *f = ui->keyGroup ? lv_group_get_focused(ui->keyGroup) : nullptr)
++                        lv_obj_remove_state(f, LV_STATE_FOCUS_KEY);
++                },
++                LV_EVENT_PRESSED, this);
++        }
++    }
++}
++
++void HopticsUI::inputDevicesChanged(void)
++{
++    const bool was = keysOn;
++    keysInit();
++    if (keysOn && !was) {
++        focusMemo.clear();
++        scopeStops.clear();
++        keyScope();
++    } else if (keysOn)
++        attachKeyInputs();
++}
++
++void HopticsUI::stop(lv_obj_t *o)
++{
++    lv_obj_add_flag(o, F_STOP);
++}
++
++void HopticsUI::wireStop(lv_obj_t *o)
++{
++    if (lv_obj_has_flag(o, F_WIRED))
++        return;
++    lv_obj_add_flag(o, F_WIRED);
++    lv_obj_add_flag(o, LV_OBJ_FLAG_SCROLL_ON_FOCUS); // buttons have it; rows and read-only cards need it too
++    if (lv_obj_check_type(o, &lv_slider_class)) {
++        lv_obj_add_style(o, &ST_FOCUS_OUT, (lv_style_selector_t)LV_PART_KNOB | LV_STATE_FOCUS_KEY);
++        lv_obj_add_style(o, &ST_EDIT_OUT, (lv_style_selector_t)LV_PART_KNOB | LV_STATE_EDITED);
++        lv_obj_set_style_outline_width(o, 0, LV_STATE_FOCUS_KEY); // not the theme's ring round the track as well
++        lv_obj_set_style_outline_width(o, 0, LV_STATE_EDITED);
++        // the knob is drawn in the text colour too: leave a gap so the ring reads as a ring
++        lv_obj_set_style_outline_pad(o, 2, (lv_style_selector_t)LV_PART_KNOB | LV_STATE_FOCUS_KEY);
++        lv_obj_set_style_outline_pad(o, 2, (lv_style_selector_t)LV_PART_KNOB | LV_STATE_EDITED);
++    } else {
++        const bool out = lv_obj_check_type(o, &lv_switch_class);
++        lv_obj_add_style(o, out ? &ST_FOCUS_OUT : &ST_FOCUS, LV_STATE_FOCUS_KEY);
++        lv_obj_add_style(o, out ? &ST_EDIT_OUT : &ST_EDIT, LV_STATE_EDITED);
++    }
++    // the ring can reach outside the control: make sure LVGL redraws that margin when the focus comes and goes
++    lv_obj_add_event_cb(
++        o, [](lv_event_t *e) { lv_obj_refresh_ext_draw_size((lv_obj_t *)lv_event_get_current_target(e)); },
++        LV_EVENT_STATE_CHANGED, nullptr);
++    // before the widget's own key handling, so back / tab keys win over e.g. a switch toggling on LEFT
++    lv_obj_add_event_cb(
++        o, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->onKey(e); },
++        (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS), this);
++    if (lv_obj_check_type(o, &lv_dropdown_class)) {
++        // an open list wants UP / DOWN for itself
++        auto ctx = [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->updateKeyContext(); };
++        lv_obj_add_event_cb(o, ctx, LV_EVENT_READY, this);
++        lv_obj_add_event_cb(o, ctx, LV_EVENT_CANCEL, this);
++    }
++}
++
++lv_obj_t *HopticsUI::topOverlay(void) const
++{
++    if (!mainScreen)
++        return nullptr;
++    // the overlays are children of the main screen; the visible one nearest the top wins
++    for (int32_t i = (int32_t)lv_obj_get_child_count(mainScreen) - 1; i >= 0; i--) {
++        lv_obj_t *c = lv_obj_get_child(mainScreen, i);
++        if (lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN))
++            continue;
++        if (c == chatOv || c == nodeOv || c == envOv || c == setOv || c == repOv || c == wizOv)
++            return c;
++    }
++    return nullptr;
++}
++
++void HopticsUI::keyFocus(lv_obj_t *o, bool ring)
++{
++    if (!o)
++        return;
++    lv_group_focus_obj(o);
++    // focus moved by the program (not inside a key event): keep the ring if keys were in use
++    if ((ring || keyActive) && !lv_obj_has_state(o, LV_STATE_FOCUS_KEY))
++        lv_obj_add_state(o, LV_STATE_FOCUS_KEY);
++}
++
++void HopticsUI::keyScope(lv_obj_t *prefer)
++{
++    if (!keysOn || !keyGroup)
++        return;
++    attachKeyInputs();
++    std::vector<lv_obj_t *> stops, last;
++    lv_obj_t *root = nullptr;
++    if (phoneScreen && lv_screen_active() == phoneScreen) {
++        root = phoneScreen;
++        collectStops(phoneScreen, stops, last);
++    } else if (mainScreen) {
++        lv_obj_t *ov = topOverlay();
++        if (keyboard && !lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN)) {
++            root = keyboard; // on-screen keyboard (only shown without a hardware keyboard)
++            stops.push_back(keyboard);
++        } else if (ov) {
++            root = ov;
++            collectStops(ov, stops, last);
++        } else {
++            // main screen: the page first, then the settings gear, then the tabs
++            root = pages[activeTab];
++            collectStops(pages[activeTab], stops, last);
++            if (statusGear)
++                stops.push_back(statusGear);
++            collectStops(navBar, stops, last);
++        }
++    }
++    stops.insert(stops.end(), last.begin(), last.end());
++
++    lv_obj_t *old = lv_group_get_focused(keyGroup);
++    const bool ring = old && lv_obj_has_state(old, LV_STATE_FOCUS_KEY);
++    auto has = [&](lv_obj_t *o) { return o && std::find(stops.begin(), stops.end(), o) != stops.end(); };
++
++    if (stops != scopeStops || lv_group_get_obj_count(keyGroup) != stops.size()) {
++        if (old && scopeRoot) {
++            // remember where we were, to come back to it
++            auto m = std::find_if(focusMemo.begin(), focusMemo.end(), [&](const auto &p) { return p.first == scopeRoot; });
++            if (m != focusMemo.end())
++                m->second = old;
++            else
++                focusMemo.emplace_back(scopeRoot, old);
++        }
++        lv_group_set_editing(keyGroup, false);
++        lv_group_remove_all_objs(keyGroup);
++        lv_group_focus_freeze(keyGroup, true); // adding must not focus (and scroll to) the first control
++        for (lv_obj_t *o : stops) {
++            wireStop(o);
++            lv_group_add_obj(keyGroup, o);
++        }
++        lv_group_focus_freeze(keyGroup, false);
++        scopeStops = stops;
++    } else if (!prefer && root == scopeRoot) {
++        updateKeyContext(); // same controls, focus stays where it is
++        return;
++    }
++
++    // where the focus goes: the caller's pick; else, on the same screen, where it was; else where it was
++    // when this screen was last left; else its first control
++    lv_obj_t *target = nullptr;
++    if (has(prefer) && shown(prefer))
++        target = prefer;
++    if (!target && root == scopeRoot && has(old) && shown(old))
++        target = old;
++    if (!target && root != scopeRoot)
++        for (const auto &m : focusMemo)
++            if (m.first == root && has(m.second) && shown(m.second))
++                target = m.second;
++    for (size_t i = 0; !target && i < stops.size(); i++)
++        if (shown(stops[i]))
++            target = stops[i];
++    scopeRoot = root;
++    if (target)
++        keyFocus(target, ring);
++    updateKeyContext();
++}
++
++void HopticsUI::keyNext(void)
++{
++    if (!keysOn || !keyGroup)
++        return;
++    lv_group_focus_next(keyGroup);
++    // this runs on the key press: the release must not click the control that has the focus now
++    if (lv_indev_t *in = lv_indev_active())
++        lv_indev_wait_release(in);
++}
++
++void HopticsUI::updateKeyContext(void)
++{
++    if (!keyGroup)
++        return;
++    if (lv_indev_t *in = lv_indev_active())
++        keyActive = isKeyIndev(in); // the focus just moved: by a key or trackball, or by a touch
++    lv_obj_t *f = lv_group_get_focused(keyGroup);
++    int c = KC_NAVIGATE;
++    if (f && lv_obj_check_type(f, &lv_dropdown_class) && lv_dropdown_is_open(f))
++        c = KC_LIST_OPEN;
++    else if (f && f == mapArea && mapPan)
++        c = KC_MAP;
++    else if (f && f == chatMsgs)
++        c = KC_SCROLL;
++    if (f != mapArea && mapPan)
++        setMapPan(false);
++    if (c != keyCtx) {
++        keyCtx = c;
++        if (cbs.setKeyContext)
++            cbs.setKeyContext(c);
++    }
++}
++
++void HopticsUI::goBack(void)
++{
++    if (keyboard && !lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN)) {
++        hideKeyboard();
++        keyScope();
++        return;
++    }
++    lv_obj_t *ov = topOverlay();
++    if (ov == chatOv)
++        closeChat();
++    else if (ov == nodeOv)
++        closeNode();
++    else if (ov == envOv)
++        closeEnv();
++    else if (ov == setOv)
++        closeSettings();
++    else if (ov == repOv)
++        closeReport();
++    else if (ov == wizOv) {
++        if (wizStep > 0)
++            wizardStep(wizStep - 1); // the wizard is only left with Skip or Finish
++    } else if (activeTab != T_HOME)
++        selectTab(T_HOME);
++}
++
++void HopticsUI::stepTab(int dir)
++{
++    lv_obj_t *f = keyGroup ? lv_group_get_focused(keyGroup) : nullptr;
++    const bool onTabs = f && lv_obj_get_parent(f) == navBar;
++    const Tab t = (Tab)((activeTab + dir + T_COUNT) % T_COUNT);
++    selectTab(t);
++    if (onTabs)
++        keyScope(navBtns[t]); // browsing the tabs: stay on them
++}
++
++void HopticsUI::keyCommand(KeyCommand c)
++{
++    if (!mainScreen || inPhoneMode())
++        return;
++    if (c == KEY_BACK) {
++        goBack();
++        return;
++    }
++    if (wizOv && !lv_obj_has_flag(wizOv, LV_OBJ_FLAG_HIDDEN))
++        return; // first-time setup is finished (or skipped) on its own page
++    // jump straight there from anywhere
++    hideKeyboard();
++    if (!lv_obj_has_flag(chatOv, LV_OBJ_FLAG_HIDDEN) && c != KEY_COMPOSE)
++        closeChat();
++    if (!lv_obj_has_flag(nodeOv, LV_OBJ_FLAG_HIDDEN))
++        closeNode();
++    closeEnv();
++    if (!lv_obj_has_flag(setOv, LV_OBJ_FLAG_HIDDEN))
++        closeSettings();
++    if (repOv && !lv_obj_has_flag(repOv, LV_OBJ_FLAG_HIDDEN))
++        closeReport();
++    switch (c) {
++    case KEY_CHATS:
++        selectTab(T_CHAT);
++        break;
++    case KEY_MAP:
++        selectTab(T_MAP);
++        break;
++    case KEY_COMPOSE: // write on the primary channel
++        selectTab(T_CHAT);
++        openChat(0);
++        keyScope(chatInput);
++        break;
++    default:
++        selectTab(T_HOME);
++        break;
++    }
++}
++
++void HopticsUI::onKey(lv_event_t *e)
++{
++    lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
++    const uint32_t raw = lv_event_get_key(e);
++    uint32_t k = raw;
++    lv_indev_t *in = lv_indev_active();
++    const bool enc = in && lv_indev_get_type(in) == LV_INDEV_TYPE_ENCODER;
++    const bool editing = keyGroup && lv_group_get_editing(keyGroup);
++    const bool isText = lv_obj_check_type(obj, &lv_textarea_class);
++    const bool isSlider = lv_obj_check_type(obj, &lv_slider_class);
++    const bool isScroll = obj == chatMsgs;
++    const bool onMain = !topOverlay() && (!keyboard || lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN)) && !inPhoneMode();
++    auto done = [&]() { lv_event_stop_processing(e); };
++
++    if (obj == mapArea && mapPan) {
++        if (k == LV_KEY_ESC || k == LV_KEY_BACKSPACE || (k == LV_KEY_ENTER && !enc)) {
++            setMapPan(false);
++            if (k == LV_KEY_ENTER && in)
++                lv_indev_wait_release(in); // or the release would click it straight back into panning
++        } else
++            mapPanKey(k, enc);
++        done();
++        return;
++    }
++    if (lv_obj_check_type(obj, &lv_dropdown_class) && lv_dropdown_is_open(obj))
++        return; // an open list: UP / DOWN / ENTER / ESC belong to it
++    if (enc && editing)
++        return; // trackball edit mode: turns and keys belong to the widget
++    if (enc) {  // trackball left / right (see the key map above)
++        if (k == LV_KEY_UP)
++            k = LV_KEY_RIGHT;
++        else if (k == LV_KEY_DOWN)
++            k = LV_KEY_LEFT;
++    }
++
++    switch (k) {
++    case LV_KEY_ENTER:
++        return;
++    case LV_KEY_ESC:
++        goBack();
++        done();
++        return;
++    case LV_KEY_BACKSPACE:
++        if (isText)
++            return;
++        goBack();
++        done();
++        return;
++    case LV_KEY_UP:
++    case LV_KEY_DOWN: // keypad only (an encoder's were turned into LEFT / RIGHT above)
++        if (isScroll && (k == LV_KEY_UP ? lv_obj_get_scroll_top(obj) > 0 : lv_obj_get_scroll_bottom(obj) > 0))
++            return; // LVGL scrolls it; at the end the keys move on
++        if (k == LV_KEY_UP)
++            lv_group_focus_prev(keyGroup);
++        else
++            lv_group_focus_next(keyGroup);
++        done();
++        return;
++    case LV_KEY_LEFT:
++    case LV_KEY_RIGHT:
++        if (isText) {
++            if (enc) { // the widget would read the trackball's UP / DOWN as line moves
++                if (k == LV_KEY_LEFT)
++                    lv_textarea_cursor_left(obj);
++                else
++                    lv_textarea_cursor_right(obj);
++                done();
++            }
++            return;
++        }
++        if (isSlider)
++            return; // LVGL changes the value (keypad LEFT / RIGHT, trackball UP / DOWN)
++        if (onMain)
++            stepTab(k == LV_KEY_LEFT ? -1 : 1);
++        else if (topOverlay() == wizOv) {
++            if (k == LV_KEY_LEFT && wizStep > 0)
++                wizardStep(wizStep - 1);
++            else if (k == LV_KEY_RIGHT && wizStep < 2)
++                wizardStep(wizStep + 1); // Finish stays a deliberate press
++        } else if (k == LV_KEY_LEFT)
++            goBack();
++        done(); // never let a stray LEFT / RIGHT toggle a switch
++        return;
++    default:
++        break;
++    }
++    // typed characters
++    if (isText || k < 0x20 || k == 0x7f || (k >= 0x100 && k < 0x200))
++        return;
++    if (topOverlay() == chatOv) { // start typing the message from anywhere in the chat
++        lv_group_focus_obj(chatInput);
++        lv_textarea_add_char(chatInput, raw);
++        done();
++        return;
++    }
++    if (onMain) {
++        static const char keys[T_COUNT] = {'h', 'l', 'm', 'c', 'n', 's'};
++        for (int i = 0; i < T_COUNT; i++)
++            if ((k | 0x20) == (uint32_t)keys[i]) {
++                selectTab((Tab)i);
++                done();
++                return;
++            }
++    }
++}
++
++void HopticsUI::setMapPan(bool on)
++{
++    if (mapPan == on)
++        return;
++    mapPan = on;
++    // edit mode: amber ring, and the trackball's turns become keys for the map
++    if (keyGroup && lv_group_get_focused(keyGroup) == mapArea)
++        lv_group_set_editing(keyGroup, on);
++    refreshMap(); // the bar above the map says so while panning
++    updateKeyContext();
++}
++
++void HopticsUI::mapPanKey(uint32_t k, bool encoder)
++{
++    if (encoder) { // edit mode: turning sends LEFT / RIGHT, trackball left / right send DOWN / UP
++        switch (k) {
++        case LV_KEY_LEFT:
++            k = LV_KEY_UP;
++            break;
++        case LV_KEY_RIGHT:
++            k = LV_KEY_DOWN;
++            break;
++        case LV_KEY_DOWN:
++            k = LV_KEY_LEFT;
++            break;
++        case LV_KEY_UP:
++            k = LV_KEY_RIGHT;
++            break;
++        default:
++            break;
++        }
++    }
++    // a quarter of the view per press; the view moves the opposite way to a finger drag
++    const int32_t sx = std::max<int32_t>(16, mapW / 4), sy = std::max<int32_t>(16, mapH / 4);
++    switch (k) {
++    case LV_KEY_LEFT:
++        mapCommitPan(sx, 0);
++        break;
++    case LV_KEY_RIGHT:
++        mapCommitPan(-sx, 0);
++        break;
++    case LV_KEY_UP:
++        mapCommitPan(0, sy);
++        break;
++    case LV_KEY_DOWN:
++        mapCommitPan(0, -sy);
++        break;
++    case '+':
++    case '=':
++        mapZoom(1);
++        break;
++    case '-':
++    case '_':
++        mapZoom(-1);
++        break;
++    default:
++        break;
++    }
++}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..ebceee0
+index 0000000..2cd8723
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,713 @@
+@@ -0,0 +1,752 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -8803,6 +9829,8 @@ index 0000000..ebceee0
 +#include "graphics/common/ViewController.h"
 +#include "graphics/driver/DisplayDriver.h"
 +#include "graphics/driver/DisplayDriverFactory.h"
++#include "input/policy/InputContextState.h"
++#include "input/policy/UICommandDispatcher.h"
 +#include "util/ILog.h"
 +#include <algorithm>
 +#include <cstdio>
@@ -9173,9 +10201,39 @@ index 0000000..ebceee0
 +        controller->sendConfig(meshtastic_ModuleConfig_TelemetryConfig{t}, ownNode); // the radio saves and restarts
 +        armRebootFallback();
 +    };
++    cb.setGps = [this](bool on) {
++        if (!havePosition)
++            return;
++        meshtastic_Config_PositionConfig p = position;
++        p.gps_mode = on ? meshtastic_Config_PositionConfig_GpsMode_ENABLED : meshtastic_Config_PositionConfig_GpsMode_DISABLED;
++        position = p;
++        controller->sendConfig(meshtastic_Config_PositionConfig{p}, ownNode); // the radio saves and restarts
++        armRebootFallback();
++    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
++    // Keyboards that go through device-ui's input policy (ThinkNode M9) have UP / DOWN turned into
++    // "next / previous control" unless the focused control wants them: an open list, the chat being
++    // scrolled, the map being panned.
++    cb.setKeyContext = [](int c) {
++        using input_policy::FocusSemantic;
++        auto &ctx = input_policy::InputContextState::instance();
++        ctx.setFocusSemantic(c == HopticsUI::KC_LIST_OPEN ? FocusSemantic::Dropdown
++                             : c == HopticsUI::KC_SCROLL  ? FocusSemantic::Scrollable
++                             : c == HopticsUI::KC_MAP     ? FocusSemantic::Map
++                                                          : FocusSemantic::Unknown);
++        ctx.setEditMode(c == HopticsUI::KC_LIST_OPEN);
++    };
 +    ui.setCallbacks(cb);
++
++    // the M9's dedicated keys (Home, Chat, Map, Preset) arrive as commands from the same input policy
++    using input_policy::UICommand;
++    auto &keys = input_policy::UICommandDispatcher::instance();
++    keys.registerHandler(UICommand::GoHome, [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_HOME); });
++    keys.registerHandler(UICommand::OpenChats, [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_CHATS); });
++    keys.registerHandler(UICommand::OpenMap, [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_MAP); });
++    keys.registerHandler(UICommand::QuickChat,
++                         [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_COMPOSE); });
 +}
 +
 +// ---------------------------------------------------------------- radio -> UI
@@ -9282,6 +10340,13 @@ index 0000000..ebceee0
 +    device = cfg;
 +    haveDevice = true;
 +    ui.setDeviceRole((int)cfg.role);
++}
++
++void HopticsView::updatePositionConfig(const meshtastic_Config_PositionConfig &cfg)
++{
++    position = cfg;
++    havePosition = true;
++    ui.setGpsMode((int)cfg.gps_mode); // Settings shows the GPS switch from now on
 +}
 +
 +void HopticsView::updateLoRaConfig(const meshtastic_Config_LoRaConfig &cfg)

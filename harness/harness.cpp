@@ -200,7 +200,7 @@ int main(int argc, char **argv)
     const uint32_t me = 0xa1b2c3d4;
     ui.setMyNode(me);
     ui.upsertNode(me, 0, now, "HOPT", "Hoptics V4 Kit", 0, true, false, 110);
-    ui.updatePosition(me, 386950000, -1212650000, 70);
+    ui.updatePosition(me, 398000000, -896500000, 70);
     ui.updateMetrics(me, 87, 4.02f, 14.6f, 2.3f);
     ui.setChannel(0, "", true);
     ui.setChannel(1, "Hikers", true);
@@ -224,15 +224,15 @@ int main(int argc, char **argv)
         int32_t lat, lon;
         int ago;
     } ns[] = {
-        {0x11aa2201, "RDGE", "Ridge Repeater", 2, 0, -78, 9.5f, 101, 387700000, -1210800000, 40},
-        {0x11aa2202, "FLSM", "Lake Node", 0, 0, -96, 4.25f, 72, 386800000, -1211700000, 95},
-        {0x11aa2203, "AUBN", "Ridge East", 11, 1, 0, 0, 101, 389000000, -1210700000, 300},
-        {0x11aa2204, "OVL1", "Home Base", 0, 0, -61, 11.0f, 100, 386790000, -1212300000, 12},
+        {0x11aa2201, "RDGE", "Ridge Repeater", 2, 0, -78, 9.5f, 101, 398750000, -894650000, 40},
+        {0x11aa2202, "FLSM", "Lake Node", 0, 0, -96, 4.25f, 72, 397850000, -895550000, 95},
+        {0x11aa2203, "AUBN", "Ridge East", 11, 1, 0, 0, 101, 400050000, -894550000, 300},
+        {0x11aa2204, "OVL1", "Home Base", 0, 0, -61, 11.0f, 100, 397840000, -896150000, 12},
         {0x11aa2205, "TRK7", "Trail Tracker 7", 5, 2, 0, 0, 34, 0, 0, 1800},
-        {0x11aa2206, "WX01", "Weather Station", 6, 1, 0, 0, 58, 386500000, -1213500000, 600},
-        {0x11aa2207, "\xF0\x9F\x93\xA1", "Rooftop \xF0\x9F\x93\xA1 Gateway", 2, 0, -104, -6.5f, 101, 386400000, -1213000000, 150},
+        {0x11aa2206, "WX01", "Weather Station", 6, 1, 0, 0, 58, 397550000, -897350000, 600},
+        {0x11aa2207, "\xF0\x9F\x93\xA1", "Rooftop \xF0\x9F\x93\xA1 Gateway", 2, 0, -104, -6.5f, 101, 397450000, -896850000, 150},
         {0x11aa2208, "CAMP", "Camp Kit", 0, 3, 0, 0, 12, 0, 0, 5400},
-        {0x11aa2209, "RSVL", "Hilltop North", 0, 2, 0, 0, 80, 387500000, -1212900000, 2400},
+        {0x11aa2209, "RSVL", "Hilltop North", 0, 2, 0, 0, 80, 398550000, -896750000, 2400},
         {0x11aa220a, "GRLD", "Mobile Unit", 1, 1, 0, 0, 66, 0, 0, 900},
         {0x11aa220b, "c3f1", "", 0, -1, 0, 0, 255, 0, 0, 40000},
     };
@@ -494,7 +494,7 @@ int main(int argc, char **argv)
     }
     ui.setTheme(0);
     ui.selectTab(HopticsUI::T_HOME);
-    ui.updatePosition(me, 386900000, -1211800000, 80); // drive into the next town -> "Now in" pop-up
+    ui.updatePosition(me, 397950000, -895650000, 80); // drive into the next town -> "Now in" pop-up
     pump(50);
     shot("30_city_popup");
     lv_obj_add_flag(ui.toast, LV_OBJ_FLAG_HIDDEN);

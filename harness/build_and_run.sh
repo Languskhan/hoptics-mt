@@ -15,7 +15,7 @@ SIZES=${HARNESS_SIZES:-240x320 320x240}
 cd "$(dirname "$0")"
 # stand-in street-map tiles (the harness has no internet)
 T=${HARNESS_TMP:-/tmp}
-[ -d "$T/tilesrc" ] || python3 make_test_tiles.py "$T/tilesrc" 38.695 -121.265 8 17 2
+[ -d "$T/tilesrc" ] || python3 make_test_tiles.py "$T/tilesrc" 39.800 -89.650 8 17 2
 for f in adler32 crc32 infback inffast inflate inftrees zutil; do gcc -c -O2 $DEFS $INC $P/$f.c -o z_$f.o; done
 g++ -std=c++20 -O1 $DEFS $INC -c $P/PNGdec.cpp -o PNGdec.o
 for S in $SIZES; do
