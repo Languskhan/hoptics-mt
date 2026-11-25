@@ -4,6 +4,12 @@
     {
       "date": "Nov 2026",
       "tag": "released",
+      "title": "v0.3.0: T-Deck Plus and ThinkNode M9",
+      "text": "Hoptics MT now runs on the LilyGO T-Deck Plus and the Elecrow ThinkNode M9 (beta), with a landscape layout and full keyboard and trackball control. The M9's location key opens a new Location card. Plugged-in radios stay awake with the screen off."
+    },
+    {
+      "date": "Nov 2026",
+      "tag": "released",
       "title": "v0.2.4: Reach check",
       "text": "See how far your messages get: gateways that upload them to MQTT are counted by hops, on the radio and in a new Reach logger on the web page. MQTT can now be set up on the radio itself. Also fixes the V4-R8 SD card slot and some overlapping text."
     },
@@ -12,12 +18,6 @@
       "tag": "progress",
       "title": "Hoptics for MeshCore",
       "text": "A big-screen version for the CrowPanel 10.1 is being built. More to share soon."
-    },
-    {
-      "date": "Nov 2026",
-      "tag": "progress",
-      "title": "More nodes",
-      "text": "T-Deck Plus and ThinkNode M9 builds are being tested, reach check included. They appear here once checked on the hardware."
     }
   ]
 }

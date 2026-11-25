@@ -1,15 +1,15 @@
 # Hoptics MT
 
-A from-scratch touch UI for **Meshtastic** on the Heltec 2.8" touch kits, built because the stock
-screen experience on the V4 Expansion Kit wasn't good enough. It's a personal build, not affiliated
+A from-scratch UI for **Meshtastic** on the Heltec 2.8" touch kits, the LilyGO T-Deck Plus and the Elecrow
+ThinkNode M9, built because the stock screen experience on the V4 Expansion Kit wasn't good enough. It's a personal build, not affiliated
 with the Meshtastic project.
 
 | Board | Build target | Notes |
 |---|---|---|
 | Heltec WiFi LoRa 32 **V4 Expansion Kit** (original, touch) | `heltec-v4-tft` | 2 MB PSRAM, 60-minute graphs |
 | Heltec **V4-R8 Expansion Kit V2** (touch, SD slot) | `heltec-v4-r8-tft` | 8 MB PSRAM, 120-minute graphs, more nodes |
-| LilyGO **T-Deck Plus** (keyboard, trackball, touch, GPS) | `t-deck-plus-tft` | **In progress**: builds, not yet tested on the hardware ([notes](#t-deck-plus-and-thinknode-m9-in-progress)) |
-| Elecrow **ThinkNode M9** (keyboard, LR1110, GPS) | `thinknode_m9-tft` | **In progress**: builds, not yet tested on the hardware ([notes](#t-deck-plus-and-thinknode-m9-in-progress)) |
+| LilyGO **T-Deck Plus** (keyboard, trackball, touch, GPS) | `t-deck-plus-tft` | **Beta**, new in v0.3.0: 320x240 landscape, keyboard + trackball + touch ([notes](#t-deck-plus-and-thinknode-m9-beta)) |
+| Elecrow **ThinkNode M9** (keyboard, LR1110, GPS) | `thinknode_m9-tft` | **Beta**, new in v0.3.0: 320x240 landscape, keys only (no touch) ([notes](#t-deck-plus-and-thinknode-m9-beta)) |
 
 It replaces both BaseUI and MUI. Everything else (radio, routing, encryption, MQTT, the phone apps)
 is upstream Meshtastic 2.8.3, unchanged.
@@ -243,29 +243,40 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
+v0.3.0: the **LilyGO T-Deck Plus** and the **Elecrow ThinkNode M9** (beta): a 320x240 landscape layout, full
+keyboard and trackball control, a GPS switch in Settings, and the M9's location key (a new Location card).
+Radios on USB or a charger now stay awake with the screen off (light sleep only on battery).
+
 v0.2.4: the **reach check** (how far your messages get, counted from MQTT gateways, by hops), **MQTT
 set-up on the radio** with a live checklist, and the **Reach logger** on the web dashboard. Fixes the
 V4-R8's microSD slot (it now reads, at 4 MHz), overlapping text on Home and Live, and the Amber theme's
 green. v0.2.3 fixed the V4-R8's slow Wi-Fi after boot and added the one-click web installer; v0.2.2 added
 the environment sensors and the web dashboard.
 
-### T-Deck Plus and ThinkNode M9 (in progress)
+### T-Deck Plus and ThinkNode M9 (beta)
 
-Both are built by CI on every push (artifacts `hoptics-mt-lilygo-t-deck-plus-mt` and
-`hoptics-mt-elecrow-thinknode-m9-mt`), but they are **not in releases or the web installer** until they
-have been tested on the hardware. What differs from the Heltec kits:
-- **Screen**: 320x240 landscape instead of 240x320 portrait.
-- **Keys**: the keyboard and the T-Deck's trackball drive the screen through focus (the M9 has no touch
-  screen). The key that wakes a dark screen only wakes it. The accent key (Shift+$ on the T-Deck) cycles
-  the accent of the letter before the cursor.
-- **GPS**: built in on both and on by default. (The T-Deck Plus build should also run on an original
-  T-Deck, which just finds no GPS.)
+Both install from the [web installer](https://languskhan.github.io/hoptics-mt/) like the Heltec kits.
+- **Installing**: a radio coming from MeshCore (or anything other than Meshtastic) needs the installer's
+  **erase** option. The **T-Deck** sometimes stays dark after the installer restarts it: slide the power switch
+  off and on. The **M9**'s first start updates its LoRa chip (about 10 seconds): keep it plugged in.
+- **Screen**: 320x240 landscape, with the tabs in a rail on the left.
+- **Keys** (the M9 has no touch screen, so everything works from keys):
+  - Arrows / trackball: move the highlight. **Enter** / trackball press: press it. **Esc**, or Backspace outside
+    a text field: back. On the main screen, Left / Right switch tabs and the letters **h l m c n s** jump to
+    Home, Live, Map, Chat, Nodes, Stats. In a chat, just type.
+  - Map: highlight it and press Enter to pan with the arrows (+ and - zoom).
+  - **M9 top keys**: Home, Chat, Map, quick message, and the **location key**: a short press opens the
+    Location card (GPS state, fix, your coordinates; Show on map, Send position, GPS on/off), a long press
+    turns GPS on or off.
+  - The key that wakes a dark screen only wakes it.
+  - The accent key (Shift+$ on the T-Deck) cycles the accent of the letter before the cursor.
+- **GPS**: built in on both and on by default; **Settings > Radio** has a GPS switch. (The T-Deck Plus build
+  should also run on an original T-Deck, which just finds no GPS.)
 - **Sound**: T-Deck through its speaker, M9 through its buzzer.
-- **Environment sensors**: neither has a sensor or a free sensor connector (the T-Deck Plus Grove port
-  carries the GPS), so the Environment card stays empty unless a sensor is wired to the I2C bus.
-- **Power**: the M9 senses USB power directly; the T-Deck uses the same detection as the V4 kits. Like
-  stock firmware on these boards, both default to Meshtastic's power saving: light sleep while the screen
-  is off, Wi-Fi is off and no computer is attached. A trackball click (T-Deck) or any key (M9) wakes them.
+- **Environment sensors**: neither has one, so the Environment card shows readings shared on the mesh.
+- **Power**: on battery, both use Meshtastic's power saving like stock firmware (light sleep while the screen
+  and Wi-Fi are off). A trackball press (T-Deck) or any key (M9) wakes them. On USB or a charger they stay
+  awake.
 
 Feedback welcome: use **Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
