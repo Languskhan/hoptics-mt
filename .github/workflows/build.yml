@@ -163,25 +163,4 @@ jobs:
           mv SHA256SUMS.txt SHA256SUMS-${{ matrix.board }}.txt
           gh release upload "${{ github.event.release.tag_name }}" SHA256SUMS-${{ matrix.board }}.txt --clobber -R "${{ github.repository }}"
 
-  installer:
-    # one-click browser installer on GitHub Pages (needs the repo to be public, or a paid plan)
-    if: github.event_name == 'release'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: site/firmware
-      - run: |
-          cp -r docs/screenshots site/ 2>/dev/null || true
-          find site -maxdepth 3 | sort
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-      - uses: actions/deploy-pages@v4
+# The one-click web installer is published by pages.yml after a release build finishes.

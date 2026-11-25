@@ -1,0 +1,62 @@
+name: Publish web installer
+
+# The one-click installer on GitHub Pages, serving the files of the latest release.
+# Runs after a release build finishes (workflow_run runs on main, which the github-pages environment
+# allows; a job on the release tag itself would be refused), or by hand from the Actions tab.
+on:
+  workflow_run:
+    workflows: ["Build Hoptics MT firmware"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the latest release's firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          mkdir -p dl
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dl -p '*.bin' -p 'SHA256SUMS*.txt'
+          ls -la dl
+
+      - name: Build the site
+        run: |
+          python tools/make_site.py dl site "$TAG"
+          mkdir -p site/screenshots
+          cp docs/screenshots/preview.png site/screenshots/ 2>/dev/null || true
+          touch site/.nojekyll
+          find site -type f | sort
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
