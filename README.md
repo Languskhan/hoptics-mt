@@ -205,10 +205,13 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 v0.2.3: fixes the V4-R8 getting no Wi-Fi address for about two minutes after every boot (startup packets
 for the screen used up the internal RAM Wi-Fi needs; they now live in PSRAM, and Wi-Fi is up in about
-12 seconds), fixes the V4-R8's SD card slot (it was clocked at 75 MHz, three times what SD cards allow, so
-every read failed), and adds the **one-click web installer**. Updating through the installer without
-erasing now keeps the screen's own settings too. Tested on both kits (V4 Expansion Kit and V4-R8 Expansion
-Kit V2). v0.2.2 added the environment sensors and got the web dashboard running.
+12 seconds), and adds the **one-click web installer**. Updating through the installer without erasing now
+keeps the screen's own settings too. Tested on both kits (V4 Expansion Kit and V4-R8 Expansion Kit V2).
+v0.2.2 added the environment sensors and got the web dashboard running.
+
+**Known issue**: the V4-R8's microSD slot isn't readable yet. The card is detected but data reads fail
+(Meshtastic's board settings for this kit; v0.2.3 already lowers its clock from 75 MHz to the 20 MHz cards
+are specified for). Nothing in Hoptics uses the card yet.
 
 Feedback welcome: use **Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
