@@ -8,6 +8,8 @@ with the Meshtastic project.
 |---|---|---|
 | Heltec WiFi LoRa 32 **V4 Expansion Kit** (original, touch) | `heltec-v4-tft` | 2 MB PSRAM, 60-minute graphs |
 | Heltec **V4-R8 Expansion Kit V2** (touch, SD slot) | `heltec-v4-r8-tft` | 8 MB PSRAM, 120-minute graphs, more nodes |
+| LilyGO **T-Deck Plus** (keyboard, trackball, touch, GPS) | `t-deck-plus-tft` | **In progress**: builds, not yet tested on the hardware ([notes](#t-deck-plus-and-thinknode-m9-in-progress)) |
+| Elecrow **ThinkNode M9** (keyboard, LR1110, GPS) | `thinknode_m9-tft` | **In progress**: builds, not yet tested on the hardware ([notes](#t-deck-plus-and-thinknode-m9-in-progress)) |
 
 It replaces both BaseUI and MUI. Everything else (radio, routing, encryption, MQTT, the phone apps)
 is upstream Meshtastic 2.8.3, unchanged.
@@ -180,7 +182,7 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
   on BaseUI if the saved config says so), adds `/hoptics` + `/json/hoptics`, and applies the web hardening.
 - `web/hoptics.html`: the web dashboard (embedded into the firmware at build time).
 - `.github/workflows/build.yml`: fetches pinned upstream firmware and device-ui, applies the patches,
-  and builds both boards.
+  and builds every board. Boards marked `untested` are built but not attached to releases.
 - `harness/`: renders every screen on a PC with fake data (that's how the screenshots were made).
 - `.github/ISSUE_TEMPLATE/bug.yml`: the bug report form the radio's QR codes open (its field ids match
   the link the radio builds).
@@ -213,6 +215,24 @@ v0.2.2 added the environment sensors and got the web dashboard running.
 **Fixed on main for the next release**: the card now runs at 4 MHz, Meshtastic's default for SD cards, and reads
 cleanly (tested with a 64 GB SDHC card, FAT32). Nothing in Hoptics uses the card yet.
 
+### T-Deck Plus and ThinkNode M9 (in progress)
+
+Both are built by CI on every push (artifacts `hoptics-mt-lilygo-t-deck-plus-mt` and
+`hoptics-mt-elecrow-thinknode-m9-mt`), but they are **not in releases or the web installer** until they
+have been tested on the hardware. What differs from the Heltec kits:
+- **Screen**: 320x240 landscape instead of 240x320 portrait.
+- **Keys**: the keyboard and the T-Deck's trackball drive the screen through focus (the M9 has no touch
+  screen). The key that wakes a dark screen only wakes it. The accent key (Shift+$ on the T-Deck) cycles
+  the accent of the letter before the cursor.
+- **GPS**: built in on both and on by default. (The T-Deck Plus build should also run on an original
+  T-Deck, which just finds no GPS.)
+- **Sound**: T-Deck through its speaker, M9 through its buzzer.
+- **Environment sensors**: neither has a sensor or a free sensor connector (the T-Deck Plus Grove port
+  carries the GPS), so the Environment card stays empty unless a sensor is wired to the I2C bus.
+- **Power**: the M9 senses USB power directly; the T-Deck uses the same detection as the V4 kits. Like
+  stock firmware on these boards, both default to Meshtastic's power saving: light sleep while the screen
+  is off, Wi-Fi is off and no computer is attached. A trackball click (T-Deck) or any key (M9) wakes them.
+
 Feedback welcome: use **Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
 
@@ -237,4 +257,5 @@ The site in `site/` (home page, firmware list and browser flasher) is published 
 - `site/updates.json`: the "What's happening" cards. Newest first; `tag` is `released`, `progress` or `coming`.
 - `site/nodes.json`: one entry per node. Copy an entry to add a node; `status` is `available` or `soon`,
   `platform` is `meshtastic` or `meshcore`, `flash` is `esp` (browser flasher) or `uf2` (download and drag).
-  An `available` node needs a matching factory image in the latest release.
+  An `available` node needs a matching factory image in the latest release; a `soon` node gets no files on
+  the site even if the release has them.
