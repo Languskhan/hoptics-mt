@@ -4,8 +4,8 @@
     {
       "date": "Nov 2026",
       "tag": "released",
-      "title": "New themes for day and night",
-      "text": "Daylight, night-red and amber themes are in. Easier to read in the sun and easier on the eyes after dark."
+      "title": "v0.2.4: Reach check",
+      "text": "See how far your messages get: gateways that upload them to MQTT are counted by hops, on the radio and in a new Reach logger on the web page. MQTT can now be set up on the radio itself. Also fixes the V4-R8 SD card slot and some overlapping text."
     },
     {
       "date": "Nov 2026",
@@ -14,10 +14,10 @@
       "text": "A big-screen version for the CrowPanel 10.1 is being built. More to share soon."
     },
     {
-      "date": "Later",
-      "tag": "coming",
+      "date": "Nov 2026",
+      "tag": "progress",
       "title": "More nodes",
-      "text": "Support for more handhelds is on the way, starting with the T-Deck Plus."
+      "text": "T-Deck Plus and ThinkNode M9 builds are being tested, reach check included. They appear here once checked on the hardware."
     }
   ]
 }
