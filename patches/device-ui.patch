@@ -544,7 +544,7 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..2175a46
+index 0000000..7540c29
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
 @@ -0,0 +1,566 @@
@@ -604,7 +604,7 @@ index 0000000..2175a46
 +#define HOPTICS_NAME "HOPTICS MT"
 +#endif
 +#ifndef HOPTICS_VERSION
-+#define HOPTICS_VERSION "0.2.2"
++#define HOPTICS_VERSION "0.2.3"
 +#endif
 +
 +class HopticsUI
