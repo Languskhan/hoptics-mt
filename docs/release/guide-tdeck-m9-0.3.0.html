@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hoptics MT – T-Deck Plus and ThinkNode M9 (0.3.0)</title>
+<style>
+@page { size: Letter; margin: 0; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, system-ui, sans-serif; color: #2b3542; font-size: 9.6pt; line-height: 1.55; }
+.page { width: 8.5in; height: 11in; padding: 0.62in 0.62in 0.5in; position: relative; page-break-after: always; overflow: hidden; }
+.eyebrow { font-size: 7.6pt; font-weight: 700; letter-spacing: 2.4px; color: #0e8fb0; margin: 0 0 4px; }
+h1 { font-size: 23pt; line-height: 1.1; margin: 0; color: #0b1118; font-weight: 700; letter-spacing: -0.3px; }
+.rule { width: 46px; height: 3px; border-radius: 2px; margin: 10px 0 14px; background: linear-gradient(90deg, #22d3ee, #8b5cf6); }
+p { margin: 0 0 8px; }
+b { color: #0b1118; }
+.row { display: flex; gap: 16px; align-items: flex-start; margin: 12px 0 14px; }
+.shots { display: flex; flex-direction: column; gap: 8px; flex: none; }
+figure { margin: 0; width: 2.3in; }
+figure img { width: 100%; display: block; border-radius: 9px; border: 4px solid #1b2531; background: #0a0f14; image-rendering: pixelated; }
+figcaption { font-size: 7pt; color: #66717f; margin-top: 3px; line-height: 1.3; }
+.txt { flex: 1; min-width: 0; }
+.tag { display: inline-block; font-size: 6.8pt; font-weight: 700; letter-spacing: 1px; color: #fff; padding: 2px 7px; border-radius: 4px; margin-bottom: 4px; }
+h2 { font-size: 13pt; margin: 0 0 6px; color: #0b1118; }
+ul, ol { margin: 0 0 8px; padding-left: 16px; }
+li { margin: 0 0 4px; }
+.call { background: #e8f7fb; border: 1px solid #bfe7f2; border-radius: 8px; padding: 10px 13px; font-size: 9pt; margin-top: 6px; }
+.call.amber { background: #fff7e6; border-color: #f5d99a; }
+.foot { position: absolute; left: 0.62in; right: 0.62in; bottom: 0.34in; border-top: 1px solid #dfe4ea; padding-top: 6px;
+        display: flex; justify-content: space-between; font-size: 7pt; color: #66717f; }
+.foot b { color: #2b3542; }
+code, kbd { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 8.4pt; background: #eef1f5; padding: 0 3px; border-radius: 3px; }
+kbd { border: 1px solid #cfd6de; border-bottom-width: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: 8.6pt; margin: 4px 0 8px; }
+th { text-align: left; font-size: 7pt; letter-spacing: 1px; color: #66717f; border-bottom: 1px solid #dfe4ea; padding: 4px 6px; }
+td { border-bottom: 1px solid #eef1f5; padding: 4px 6px; vertical-align: top; }
+td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<section class="page">
+  <p class="eyebrow">NEW IN 0.3.0 · BETA</p>
+  <h1>T-Deck Plus and ThinkNode M9</h1>
+  <div class="rule"></div>
+  <p>Hoptics MT also runs on two keyboard handhelds: the <b>LilyGO T-Deck Plus</b> (keyboard, trackball, touch screen,
+  GPS) and the <b>Elecrow ThinkNode M9</b> (keyboard, GPS, no touch screen). Everything in the Hoptics MT user guide
+  applies to them; these two pages cover what is different. Both are marked <b>beta</b>: please report anything odd.</p>
+
+  <div class="row">
+    <div class="shots">
+      <figure><img src="guide-img-030/home.png" alt=""><figcaption>Home, sideways: the tabs are in a rail on the left</figcaption></figure>
+      <figure><img src="guide-img-030/focus.png" alt=""><figcaption>The highlight (here on Environment) shows where a key press goes</figcaption></figure>
+    </div>
+    <div class="txt">
+      <span class="tag" style="background:#0e8fb0">SCREEN</span>
+      <h2>Landscape layout</h2>
+      <p>The 320x240 screens are wider than tall, so the tabs (Home, Live, Map, Chat, Nodes, Stats) sit in a rail
+      on the left, Home shows its four tiles in one row, and Settings puts labels beside their controls.</p>
+
+      <span class="tag" style="background:#8b5cf6">INSTALL</span>
+      <h2>Installing</h2>
+      <ul>
+        <li>Same as the Heltec kits: open <code>languskhan.github.io/hoptics-mt</code> in Chrome or Edge, pick your
+          radio, <b>Connect and install</b>.</li>
+        <li><b>Coming from MeshCore, WADAMESH or other firmware:</b> tick <b>Erase</b>. Updating Hoptics: leave it off.</li>
+        <li><b>T-Deck Plus:</b> if the screen stays dark after installing, slide the power switch off and on.</li>
+        <li><b>ThinkNode M9:</b> the first start updates its LoRa chip (about 10 seconds). Keep it plugged in.
+          The M9 shows up as a <i>USB-SERIAL CH340</i> port.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Keys and trackball</h2>
+  <p>Everything a finger can do, the keys can do. A ring shows the highlighted control (a tap on the T-Deck's screen hides it).</p>
+  <table>
+    <tr><th>KEY</th><th>WHAT IT DOES</th></tr>
+    <tr><td>Arrows / roll the trackball</td><td>Move the highlight. Main screen: Left / Right switch tabs. On a page on top, Left goes back.</td></tr>
+    <tr><td><kbd>Enter</kbd> / press the trackball</td><td>Press the highlighted control: open a row, flip a switch, open a list, send.</td></tr>
+    <tr><td><kbd>Esc</kbd>, or <kbd>Backspace</kbd> outside a text field</td><td>Back: close the page on top, or go to Home (T-Deck: Backspace, or roll the trackball left).</td></tr>
+    <tr><td><kbd>h</kbd> <kbd>l</kbd> <kbd>m</kbd> <kbd>c</kbd> <kbd>n</kbd> <kbd>s</kbd></td><td>On the main screen: jump to Home, Live, Map, Chat, Nodes, Stats.</td></tr>
+    <tr><td>Typing in a chat</td><td>Goes straight into the message; <kbd>Enter</kbd> sends. No on-screen keyboard.</td></tr>
+    <tr><td>Map</td><td>Highlight the map and press Enter to pan with the arrows or trackball; <kbd>+</kbd> and <kbd>-</kbd> zoom; Enter or Esc stops.</td></tr>
+  </table>
+  <div class="call">T-Deck trackball: lists, sliders and the message field take two presses: press, roll to change, press
+  again (in the message field that sends). A press on a dark screen only wakes it.</div>
+
+  <div class="foot"><span><b>Hoptics MT</b> · T-Deck Plus and ThinkNode M9</span><span>1</span></div>
+</section>
+
+<section class="page">
+  <p class="eyebrow">NEW IN 0.3.0 · BETA</p>
+  <h1>The M9's keys, the Location card and GPS</h1>
+  <div class="rule"></div>
+
+  <div class="row">
+    <div class="shots">
+      <figure><img src="guide-img-030/location.png" alt=""><figcaption>The Location card (location key, short press)</figcaption></figure>
+      <figure><img src="guide-img-030/locmap.png" alt=""><figcaption>Show on map: the map follows your position</figcaption></figure>
+    </div>
+    <div class="txt">
+      <span class="tag" style="background:#0e8fb0">M9</span>
+      <h2>The keys above the keyboard</h2>
+      <table>
+        <tr><th>KEY</th><th>WHAT IT DOES</th></tr>
+        <tr><td>Message bubble</td><td>Opens Chat.</td></tr>
+        <tr><td>House</td><td>Home.</td></tr>
+        <tr><td>Second bubble</td><td>A new message on the primary channel.</td></tr>
+        <tr><td>Big center key</td><td>OK (Enter). The ring around it moves the highlight.</td></tr>
+        <tr><td>Back</td><td>Back.</td></tr>
+        <tr><td>Location</td><td>Short press: the <b>Location</b> card. Long press: GPS on or off.</td></tr>
+        <tr><td>Map</td><td>Opens the Map.</td></tr>
+      </table>
+
+      <span class="tag" style="background:#22a06b">LOCATION</span>
+      <h2>The Location card</h2>
+      <ul>
+        <li>Shows whether GPS is on, the fix and how long ago, satellites (when the radio reports them), your
+          coordinates and altitude.</li>
+        <li><b>Show on map</b> jumps to the map and follows you. <b>Send position</b> sends your GPS position out now,
+          on the first channel that shares position. <b>Turn GPS off/on</b> needs a second press to confirm; the radio
+          restarts to apply it.</li>
+        <li>Press the location key again, or Back, to close it. On any radio, tapping <b>Your location</b> on Home opens it too.</li>
+      </ul>
+    </div>
+  </div>
+
+  <span class="tag" style="background:#8b5cf6">GPS AND POWER</span>
+  <h2>GPS and battery</h2>
+  <ul>
+    <li>Both have GPS built in, on by default. <b>Settings &gt; Radio</b> has a GPS switch (also on the V4-R8 kit).</li>
+    <li>"Fix" on the Location card is worked out from the radio's position updates (about one a minute), so after
+      losing the sky it can still say "yes" for a few minutes.</li>
+    <li>On battery, both use Meshtastic's power saving like their stock firmware: once the screen and Wi-Fi are off
+      they sleep lightly and wake on a key, a trackball press or a message. On USB or a charger they stay awake.</li>
+  </ul>
+
+  <div class="call amber"><b>Something not right?</b> Use <b>Report a problem</b> in Settings (it makes a QR code with
+  the details), or open an issue at <code>github.com/Languskhan/hoptics-mt/issues</code>. Say which radio you have.</div>
+
+  <div class="foot"><span><b>Hoptics MT</b> · T-Deck Plus and ThinkNode M9</span><span>2</span></div>
+</section>
+</body>
+</html>

@@ -181,8 +181,10 @@ jobs:
           if [ "${{ strategy.job-index }}" = "0" ]; then
             cd "$GITHUB_WORKSPACE/docs/release"
             [ -f START-HERE-Hoptics-MT-install-guide.html ] && gh release upload "${{ github.event.release.tag_name }}" START-HERE-Hoptics-MT-install-guide.html --clobber -R "${{ github.repository }}"
-            g=$(ls Hoptics-MT-User-Guide-*.pdf 2>/dev/null | sort -V | tail -1)
-            [ -n "$g" ] && gh release upload "${{ github.event.release.tag_name }}" "$g" --clobber -R "${{ github.repository }}"
+            for pat in 'Hoptics-MT-User-Guide-*.pdf' 'Hoptics-MT-T-Deck-Plus-M9-Guide-*.pdf'; do
+              g=$(ls $pat 2>/dev/null | sort -V | tail -1)
+              [ -n "$g" ] && gh release upload "${{ github.event.release.tag_name }}" "$g" --clobber -R "${{ github.repository }}"
+            done
           fi
 
 # The one-click web installer is published by pages.yml after a release build finishes.
