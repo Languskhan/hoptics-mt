@@ -453,6 +453,9 @@ int main(int argc, char **argv)
     lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -70, LV_ANIM_OFF);
     pump(20);
     shot("50c_settings_report_button");
+    lv_obj_scroll_to_y(lv_obj_get_child(ui.setOv, 1), 100000, LV_ANIM_OFF);
+    pump(20);
+    shot("55_settings_support");
     ui.openReport(false);
     pump(20);
     shot("47_report_problem");
