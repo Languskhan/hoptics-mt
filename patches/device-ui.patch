@@ -1264,7 +1264,7 @@ index 71cbee1..a0f7440 100644
  /** Checkbox */
  #define LV_USE_CHECKBOX 1
 diff --git a/include/util/Packet.h b/include/util/Packet.h
-index 5ddff3f..837101c 100644
+index 5ddff3f..b4aa7e3 100644
 --- a/include/util/Packet.h
 +++ b/include/util/Packet.h
 @@ -1,6 +1,11 @@
@@ -1289,14 +1289,16 @@ index 5ddff3f..837101c 100644
      {
      }
  
-@@ -58,5 +64,31 @@ template <typename PacketType> class DataPacket : public Packet
+@@ -58,5 +64,33 @@ template <typename PacketType> class DataPacket : public Packet
      DataPacket &operator=(DataPacket &&) = default;
  
    private:
 -    std::unique_ptr<PacketType> data;
 +    // Hoptics MT: packets pile up in the queue whenever the screen task falls behind (one FromRadio is
-+    // 768 bytes, and the queue holds up to 64), and on ESP32 anything under 4 KB is placed in internal
-+    // RAM by default, which Wi-Fi and Bluetooth need. On boards with PSRAM keep the packets there.
++    // 768 bytes; right after boot ~70 of them wait while the screen restores its messages), and on ESP32
++    // anything under 4 KB is placed in internal RAM by default, which Wi-Fi and Bluetooth need: on the
++    // V4-R8 that left Wi-Fi without buffers and no address for two minutes. Keep the packets in PSRAM.
++    // (Don't shorten the queue instead: the firmware treats a full queue as "screen disconnected".)
 +    struct Release {
 +        void operator()(PacketType *p) const
 +        {
@@ -1322,22 +1324,6 @@ index 5ddff3f..837101c 100644
 +
 +    std::unique_ptr<PacketType, Release> data;
  };
-diff --git a/source/comms/packet/PacketServer.cpp b/source/comms/packet/PacketServer.cpp
-index 47278b4..93cc9c5 100644
---- a/source/comms/packet/PacketServer.cpp
-+++ b/source/comms/packet/PacketServer.cpp
-@@ -2,7 +2,10 @@
- #include "util/SharedQueue.h"
- #include <assert.h>
- 
--const uint32_t max_packet_queue_size = 300;
-+// Hoptics MT: was 300. The firmware only queues one packet per 10 ms and simply waits while the queue is
-+// full, so a shorter queue loses nothing; it just stops a slow screen from hoarding up to 300 x 768 bytes
-+// (on the V4-R8 that used up all internal RAM right after boot, and Wi-Fi then got no address).
-+const uint32_t max_packet_queue_size = 64;
- 
- SharedQueue *sharedQueue = nullptr;
- 
 diff --git a/source/graphics/TFT/HopticsReport.cpp b/source/graphics/TFT/HopticsReport.cpp
 new file mode 100644
 index 0000000..8f66cfd
