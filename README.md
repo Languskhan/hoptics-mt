@@ -23,13 +23,17 @@ is upstream Meshtastic 2.8.3, unchanged.
 - **Home**: nodes online, channel utilisation, your airtime, packets per minute, the **Environment**
   card (below), a 30-minute activity graph, radio summary (region, preset, frequency, hop limit, power)
   and last-heard list.
-- **Environment sensors**: both kits come with a sensor board: a BME280 (temperature, humidity,
-  pressure) and, on some boards, a GXHTC3 (temperature, humidity). Home shows the reading in °F or °C, humidity,
+- **Environment sensors**: the kits take plug-in sensor modules inside the case: a BME280
+  (temperature, humidity, pressure) and a GXHTC3 (temperature, humidity). The V4-R8 Kit V2 has two
+  module slots (its buzzer and GPS are built in); the V4 Expansion Kit has three (buzzer, BME280,
+  GXHTC3). Home shows the reading in °F or °C, humidity,
   pressure (inHg or hPa) with a rising/falling arrow, and a graph. Tap it for 24 hours of temperature,
   humidity and pressure graphs, the dew point, the 3-hour pressure trend, and a list of **other nodes
   that share readings** on the mesh. Readings stay on your radio (screen and web page) unless you turn on
   **Share on mesh** in Settings > SENSORS (every 30 min to 12 h). Nodes that share readings show them on
-  their node page.
+  their node page. Because the sensors sit inside the case they read warm, so Settings > SENSORS also
+  has a **temperature correction**: tap − or + until it matches a thermometer in the room (humidity is
+  corrected to match, and shared readings use the corrected values).
 - **Live**: every packet as it's heard, like a DMR hotspot last-heard list: who, packet type, direct
   or how many hops, RSSI/SNR. Filter All / RF only / **MQTT only** (MQTT rows have a violet edge).
 - **Map**: nodes that share GPS are plotted around you on an OpenStreetMap street map (themed to match:
