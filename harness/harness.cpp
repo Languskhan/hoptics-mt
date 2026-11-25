@@ -666,6 +666,9 @@ int main(int argc, char **argv)
         expect(focused() == ui.homeEnv, "Home starts on the environment card");
         kshot("60_keys_home");
         key(LV_KEY_DOWN);
+        expect(focused() == ui.homeLoc, "DOWN: your location (opens the Location card)");
+        kshot("60a_keys_home_location");
+        key(LV_KEY_DOWN);
         expect(focused() == ui.homeLast[0], "DOWN: first last-heard row");
         kshot("60b_keys_home_last_heard");
 
@@ -824,6 +827,82 @@ int main(int argc, char **argv)
         ui.keyCommand(HopticsUI::KEY_HOME);
         expect(lv_obj_has_flag(ui.chatOv, LV_OBJ_FLAG_HIDDEN) && ui.activeTab == HopticsUI::T_HOME, "home key");
 
+        // ThinkNode M9 location key: short press = the Location card, long press = GPS on / off
+        int sent = 0, gpsSet = -1;
+        ui.cbs.sendPosition = [&](int32_t, int32_t, int32_t) { return ++sent > 0; };
+        ui.cbs.setGps = [&](bool on) { gpsSet = on; };
+        auto hidden = [](lv_obj_t *o) { return lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN); };
+        auto toastIs = [&](const char *t) { return !hidden(ui.toast) && strstr(lv_label_get_text(ui.toastLabel), t); };
+        ui.setGpsMode(1);
+        ui.updatePosition(me, 397950000, -895650000, 80, 9); // a fresh fix from 9 satellites
+        ui.keyCommand(HopticsUI::KEY_LOCATION);
+        expect(!hidden(ui.locOv) && focused() == ui.locMapBtn, "location key: the card, on Show on map");
+        kshot("75_keys_location");
+        key(LV_KEY_DOWN);
+        key(LV_KEY_ENTER);
+        expect(sent == 1 && toastIs("Position sent"), "Send my position");
+        kshot("75b_keys_location_sent");
+        key(LV_KEY_DOWN);
+        key(LV_KEY_ENTER);
+        expect(focused() == ui.locGpsBtn && gpsSet < 0, "GPS button: asks for a second press");
+        kshot("75c_keys_location_gps_confirm");
+        key(LV_KEY_ENTER);
+        expect(gpsSet == 0 && ui.gpsMode == 0 && toastIs("Turning GPS off"), "second press: GPS off, the radio restarts");
+        kshot("75d_keys_location_gps_off");
+        ui.keyCommand(HopticsUI::KEY_LOCATION);
+        expect(hidden(ui.locOv) && ui.activeTab == HopticsUI::T_HOME, "location key again: card closed");
+        ui.keyCommand(HopticsUI::KEY_GPS);
+        expect(gpsSet == 1 && ui.gpsMode == 1 && toastIs("Turning GPS on"), "long press: GPS on");
+        kshot("75e_keys_gps_long_press");
+        lv_obj_add_flag(ui.toast, LV_OBJ_FLAG_HIDDEN);
+        ui.keyCommand(HopticsUI::KEY_COMPOSE); // over a chat: ESC goes back to it
+        ui.keyCommand(HopticsUI::KEY_LOCATION);
+        expect(!hidden(ui.locOv) && !hidden(ui.chatOv), "location key over a chat");
+        key(LV_KEY_ESC);
+        expect(hidden(ui.locOv) && !hidden(ui.chatOv) && focused() == ui.chatInput, "ESC: back in the chat, typing");
+        ui.keyCommand(HopticsUI::KEY_LOCATION);
+        ui.mapUserPan = true;
+        key(LV_KEY_ENTER);
+        expect(hidden(ui.locOv) && hidden(ui.chatOv) && ui.activeTab == HopticsUI::T_MAP && !ui.mapUserPan,
+               "Show on map: the map, following us");
+        kshot("75f_keys_location_map");
+        ui.keyCommand(HopticsUI::KEY_HOME);
+        {
+            HopticsUI::Node *mn = ui.nodePtr(me); // no position yet: only the GPS button can do anything
+            mn->hasPos = false;
+            const uint32_t fixAt = ui.myFixTime;
+            ui.myFixTime = 0;
+            ui.keyCommand(HopticsUI::KEY_LOCATION);
+            expect(focused() == ui.locGpsBtn && lv_obj_has_state(ui.locMapBtn, LV_STATE_DISABLED), "no position: on the GPS button");
+            kshot("75g_keys_location_no_fix");
+            key(LV_KEY_ESC);
+            ui.dirtyHome = true;
+            ui.tick(ui.nowTs);
+            lv_obj_scroll_to_view_recursive(ui.homeLoc, LV_ANIM_OFF);
+            kshot("75h_keys_home_no_fix");
+            mn->hasPos = true; // only the stored position from the node list: shown, not sent
+            ui.keyCommand(HopticsUI::KEY_LOCATION);
+            expect(focused() == ui.locMapBtn && lv_obj_has_state(ui.locSendBtn, LV_STATE_DISABLED), "stored position: map, no send");
+            kshot("75j_keys_location_last_known");
+            key(LV_KEY_ESC);
+            ui.myFixTime = fixAt;
+            ui.gpsMode = -1; // a radio without a receiver
+            ui.keyCommand(HopticsUI::KEY_GPS);
+            expect(gpsSet == 1 && toastIs("No GPS on this radio"), "long press without GPS");
+            kshot("75i_keys_gps_none");
+            lv_obj_add_flag(ui.toast, LV_OBJ_FLAG_HIDDEN);
+            ui.gpsMode = 1;
+        }
+        for (int t = 0; t < 4; t++) {
+            ui.setTheme(t);
+            ui.keyCommand(HopticsUI::KEY_LOCATION);
+            key(LV_KEY_DOWN);
+            kshot((std::string("76_keys_location_") + tn[t]).c_str());
+            key(LV_KEY_ESC);
+        }
+        ui.setTheme(0);
+        ui.keyCommand(HopticsUI::KEY_HOME);
+
         // keyboard plus touch screen (T-Deck Plus): a tap hides the ring, the next key brings it back
         lv_indev_t *touch = lv_indev_create();
         lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
@@ -842,6 +921,16 @@ int main(int argc, char **argv)
         expect(lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN) && focused() == ui.nodeRows[2].row &&
                    lv_obj_has_state(focused(), LV_STATE_FOCUS_KEY),
                "ESC: back on the tapped row, with the ring");
+        ui.selectTab(HopticsUI::T_HOME);
+        lv_obj_scroll_to_view_recursive(ui.homeLoc, LV_ANIM_OFF);
+        pump(50);
+        tap(ui.homeLoc);
+        expect(!hidden(ui.locOv), "tap on Home's location card: the Location card");
+        tap(ui.locGpsBtn);
+        kshot("77_touch_location_gps_confirm");
+        tap(lv_obj_get_child(lv_obj_get_child(ui.locOv, 0), 0));
+        expect(hidden(ui.locOv), "tap on back: card closed");
+        key(LV_KEY_DOWN); // keys last again (the ring is back), as the phone-mode shot expects
 
         ui.showPhoneMode(482913, false);
         pump(30);
@@ -849,6 +938,25 @@ int main(int argc, char **argv)
         printf("key navigation: %d failed checks\n", fails);
         if (fails)
             return 1;
+    } else {
+        // the Location card from Home's location card; this board has no GPS receiver
+        if (lv_obj_t *phone = ui.phoneScreen) {
+            ui.phoneScreen = nullptr;
+            lv_screen_load(ui.mainScreen);
+            lv_obj_delete(phone);
+        }
+        ui.closeSettings();
+        ui.selectTab(HopticsUI::T_HOME);
+        pump(50);
+        lv_obj_send_event(ui.homeLoc, LV_EVENT_CLICKED, nullptr);
+        pump(50);
+        shot("78_location");
+        ui.setGpsMode(1);
+        ui.myFixTime = ui.nowTs - 25;
+        ui.mySats = 7;
+        ui.refreshLocation();
+        pump(50);
+        shot("78b_location_fix");
     }
     return 0;
 }

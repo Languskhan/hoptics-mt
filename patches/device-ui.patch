@@ -641,10 +641,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..f622797
+index 0000000..87aa693
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,618 @@
+@@ -0,0 +1,631 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -836,6 +836,8 @@ index 0000000..f622797
 +        std::function<void(bool share, uint32_t intervalSecs)> setEnvSharing;
 +        // GPS receiver on / off (Config.PositionConfig.gps_mode; the radio restarts)
 +        std::function<void(bool on)> setGps;
++        // broadcast this node's position now (Location card); false when no channel shares positions
++        std::function<bool(int32_t lat, int32_t lon, int32_t alt)> sendPosition;
 +        // what the arrow keys should do now (KeyContext), for keyboard drivers that turn UP/DOWN into
 +        // "next/previous control" unless told otherwise (the ThinkNode M9's input policy)
 +        std::function<void(int context)> setKeyContext;
@@ -860,7 +862,7 @@ index 0000000..f622797
 +                    bool hasKey, bool viaMqtt, uint16_t hwModel);
 +    void touchNode(uint32_t num, uint32_t lastHeard); // create placeholder if unknown
 +    void removeNode(uint32_t num);
-+    void updatePosition(uint32_t num, int32_t lat, int32_t lon, int32_t alt);
++    void updatePosition(uint32_t num, int32_t lat, int32_t lon, int32_t alt, uint32_t sats = 0); // sats: in view, 0 = unknown
 +    void updateMetrics(uint32_t num, uint8_t battery, float voltage, float chUtil, float airUtil);
 +    void updateSignal(uint32_t num, int16_t rssi, float snr);
 +    void updateHops(uint32_t num, int8_t hops);
@@ -924,8 +926,9 @@ index 0000000..f622797
 +    // it if the input drivers have not), attaches every keypad/encoder indev to it, and keeps it holding
 +    // only the controls of whatever is on top. Touch-only boards are left as they were.
 +    enum KeyContext { KC_NAVIGATE, KC_SCROLL, KC_MAP, KC_LIST_OPEN };
-+    enum KeyCommand { KEY_HOME, KEY_CHATS, KEY_MAP, KEY_COMPOSE, KEY_BACK };
-+    void keyCommand(KeyCommand c);  // dedicated keys (M9: Home, Chat, Map, Preset, Back)
++    enum KeyCommand { KEY_HOME, KEY_CHATS, KEY_MAP, KEY_COMPOSE, KEY_BACK, KEY_LOCATION, KEY_GPS };
++    // dedicated keys (M9: Home, Chat, Map, Preset, Back; location: short = Location card, long = GPS on/off)
++    void keyCommand(KeyCommand c);
 +    void inputDevicesChanged(void); // after adding a keypad/encoder indev (also noticed by tick() within a second)
 +    bool keyNavigation(void) const { return keysOn; }
 +
@@ -960,6 +963,11 @@ index 0000000..f622797
 +    void buildWizard(void);
 +    void wizardStep(int step);
 +    void buildReportOverlay(void);
++    void buildLocationOverlay(void);
++    void openLocation(void);
++    void closeLocation(void);
++    void refreshLocation(void);
++    void toggleGps(void);
 +    std::string reportStatus(void) const;
 +    void buildEnvOverlay(void);
 +    void openEnv(void);
@@ -1132,6 +1140,11 @@ index 0000000..f622797
 +    int lnaMode = 2; // not present until the radio says otherwise
 +    lv_obj_t *setGpsRow = nullptr, *setGpsSw = nullptr;
 +    int gpsMode = -1; // not reported yet: no GPS switch
++    // Location card (M9 location key, or the Home location card)
++    lv_obj_t *locOv = nullptr, *locState = nullptr, *locInfo = nullptr, *locMapBtn = nullptr, *locSendBtn = nullptr,
++             *locGpsBtn = nullptr;
++    uint32_t myFixTime = 0; // when this node's position last came in
++    uint16_t mySats = 0;
 +    lv_obj_t *mainScreen = nullptr;
 +    lv_obj_t *statusTime = nullptr, *statusName = nullptr, *statusBatt = nullptr, *statusMsg = nullptr, *statusLink = nullptr,
 +             *statusMqtt = nullptr, *statusBt = nullptr;
@@ -1265,10 +1278,10 @@ index 0000000..f622797
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..46c8d9b
+index 0000000..49e373c
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,102 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1354,6 +1367,7 @@ index 0000000..46c8d9b
 +    meshtastic_Config_PositionConfig position{};
 +    meshtastic_User myUser{};
 +    char channel0Name[12] = "";
++    uint8_t posPrecision[8] = {0}; // per channel; 0 = no position shared there
 +    bool haveLora = false, haveDevice = false, haveBt = false, haveNetwork = false, havePosition = false;
 +    bool mainShown = false;
 +    uint32_t bootStart = 0;
@@ -3161,10 +3175,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..dcfc631
+index 0000000..eda025f
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,6644 @@
+@@ -0,0 +1,6847 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -4445,6 +4459,7 @@ index 0000000..dcfc631
 +    buildEnvOverlay();
 +    buildSettingsOverlay();
 +    buildReportOverlay();
++    buildLocationOverlay();
 +    buildWizard();
 +    buildKeyboard();
 +
@@ -4828,6 +4843,10 @@ index 0000000..dcfc631
 +    lv_label_set_long_mode(homeEnvSub, LV_LABEL_LONG_MODE_WRAP);
 +
 +    homeLoc = card(p, "YOUR LOCATION");
++    stop(homeLoc);
++    lv_obj_set_style_bg_color(homeLoc, C_CARD2, LV_STATE_PRESSED);
++    lv_obj_add_event_cb(
++        homeLoc, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openLocation(); }, LV_EVENT_CLICKED, this);
 +    homeLocCity = label(homeLoc, &F16, C_TEXT, "");
 +    lv_obj_set_width(homeLocCity, LV_PCT(100));
 +    oneLine(homeLocCity);
@@ -4908,6 +4927,11 @@ index 0000000..dcfc631
 +                lv_label_set_text_fmt(homeLocSub, "%s  -  %d m", buf, (int)me->alt);
 +            else
 +                lv_label_set_text(homeLocSub, buf);
++            lv_obj_remove_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
++        } else if (hoptics::board::kGps && gpsMode >= 0) {
++            // a board with a receiver: say why there is no position (and the card leads to the GPS switch)
++            lv_label_set_text(homeLocCity, LV_SYMBOL_GPS "  No position yet");
++            lv_label_set_text(homeLocSub, gpsMode == 1 ? "GPS on - waiting for a fix" : "GPS is off");
 +            lv_obj_remove_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
 +        } else
 +            lv_obj_add_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
@@ -7570,7 +7594,7 @@ index 0000000..dcfc631
 +    dirtyNodes = dirtyHome = dirtyStats = true;
 +}
 +
-+void HopticsUI::updatePosition(uint32_t num, int32_t lat, int32_t lon, int32_t alt)
++void HopticsUI::updatePosition(uint32_t num, int32_t lat, int32_t lon, int32_t alt, uint32_t sats)
 +{
 +    if (lat == 0 && lon == 0)
 +        return;
@@ -7584,6 +7608,10 @@ index 0000000..dcfc631
 +    if (num == myNode) {
 +        lookupCity(n);
 +        dirtyHome = true;
++        if (mainScreen) // not the stored one in the node list at start-up: the radio re-sends it every minute
++            myFixTime = nowTs;
++        if (sats)
++            mySats = (uint16_t)std::min<uint32_t>(sats, 99);
 +        // WADAMESH-style arrival pop-up when we move into a different town
 +        if (n.cityIdx >= 0 && n.cityKm < IN_CITY_KM && n.cityIdx != myCityIdx) {
 +            char t[96];
@@ -7917,6 +7945,10 @@ index 0000000..dcfc631
 +        inputDevicesChanged(); // a keyboard or trackball that came up after the screen was built
 +
 +    // overlays first
++    if (!lv_obj_has_flag(locOv, LV_OBJ_FLAG_HIDDEN)) {
++        refreshLocation(); // fix age, satellites
++        return;
++    }
 +    if (!lv_obj_has_flag(nodeOv, LV_OBJ_FLAG_HIDDEN)) {
 +        if (dirtyNodeOv)
 +            refreshNodeOverlay();
@@ -9310,6 +9342,175 @@ index 0000000..dcfc631
 +    openReport(true);
 +}
 +
++// ================================================================= LOCATION
++// The ThinkNode M9's location key (and a tap on Home's location card): GPS state, the last fix, and three
++// actions in key order - show me on the map, send my position now, GPS on/off (two presses: it restarts).
++void HopticsUI::buildLocationOverlay(void)
++{
++    locOv = overlayPanel("Location", nullptr, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeLocation(); });
++    lv_obj_t *body = plain(locOv);
++    lv_obj_set_width(body, LV_PCT(100));
++    lv_obj_set_flex_grow(body, 1);
++    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_scroll_dir(body, LV_DIR_VER);
++    lv_obj_set_style_pad_all(body, PAD, 0);
++    if (LAND)
++        row(body, PAD); // landscape: the facts on the left, the buttons in a column beside them
++    else
++        column(body, PAD);
++    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
++    lv_obj_t *info = card(body, nullptr);
++    if (LAND) {
++        lv_obj_set_width(info, 1);
++        lv_obj_set_flex_grow(info, 1);
++    }
++    locState = label(info, &F20, C_TEXT, "");
++    locInfo = label(info, &F12, C_TEXT, "");
++    lv_obj_set_width(locInfo, LV_PCT(100));
++    lv_label_set_long_mode(locInfo, LV_LABEL_LONG_MODE_WRAP);
++    lv_obj_set_style_text_line_space(locInfo, 3, 0);
++
++    lv_obj_t *acts = plain(body);
++    lv_obj_set_size(acts, LAND ? 140 : LV_PCT(100), LV_SIZE_CONTENT);
++    column(acts, PAD);
++    locMapBtn = flatButton(acts, LV_SYMBOL_GPS " Show on map", C_CYAN, LV_PCT(100), 34);
++    locSendBtn = flatButton(acts, LAND ? LV_SYMBOL_UPLOAD " Send position" : LV_SYMBOL_UPLOAD " Send my position", C_GREEN,
++                            LV_PCT(100), 34);
++    locGpsBtn = flatButton(acts, "", C_AMBER, LV_PCT(100), 34);
++    for (lv_obj_t *b : {locMapBtn, locSendBtn, locGpsBtn}) {
++        stop(b);
++        lv_obj_set_style_opa(b, LV_OPA_40, LV_STATE_DISABLED);
++    }
++    lv_obj_add_event_cb(
++        locMapBtn,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            ui->mapUserPan = false; // centred on us, and following us as we move
++            ui->keyCommand(KEY_MAP);
++        },
++        LV_EVENT_CLICKED, this);
++    lv_obj_add_event_cb(
++        locSendBtn,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            const Node *me = ui->findNode(ui->myNode);
++            if (me && me->hasPos && ui->myFixTime && ui->cbs.sendPosition && ui->cbs.sendPosition(me->lat, me->lon, me->alt))
++                ui->showToast(LV_SYMBOL_UPLOAD " Position sent");
++            else
++                ui->showToast(LV_SYMBOL_WARNING " Not sent - no channel shares positions", 4000);
++        },
++        LV_EVENT_CLICKED, this);
++    // two presses, like Reboot: the radio restarts to apply it
++    lv_obj_add_event_cb(
++        locGpsBtn,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            lv_obj_t *b = ui->locGpsBtn;
++            if (lv_obj_has_state(b, LV_STATE_USER_1)) {
++                lv_obj_remove_state(b, LV_STATE_USER_1);
++                ui->toggleGps();
++                ui->refreshLocation();
++                return;
++            }
++            lv_obj_add_state(b, LV_STATE_USER_1);
++            setButtonText(b, ui->touchInput ? "Tap again" : "Press again");
++            lv_timer_t *t = lv_timer_create(
++                [](lv_timer_t *t) {
++                    HopticsUI *u = (HopticsUI *)lv_timer_get_user_data(t);
++                    lv_obj_remove_state(u->locGpsBtn, LV_STATE_USER_1);
++                    u->refreshLocation();
++                },
++                3000, ui);
++            lv_timer_set_repeat_count(t, 1);
++        },
++        LV_EVENT_CLICKED, this);
++    lv_obj_add_flag(locOv, LV_OBJ_FLAG_HIDDEN);
++}
++
++void HopticsUI::refreshLocation(void)
++{
++    if (!locOv)
++        return;
++    const Node *me = findNode(myNode);
++    const bool pos = me && me->hasPos, noGps = gpsMode < 0 || (gpsMode == 2 && !hoptics::board::kGps);
++    // the radio re-sends its own position every minute while it has one: a recent one counts as a fix
++    const bool fix = gpsMode == 1 && pos && myFixTime && nowTs - std::min(nowTs, myFixTime) < 180;
++    char t[272], ago[8]; // each piece below is capped, and together they fit
++    agoString(myFixTime, ago, sizeof(ago));
++    lv_label_set_text(locState, fix            ? LV_SYMBOL_GPS " GPS fix"
++                                : gpsMode == 1 ? "No fix yet"
++                                : gpsMode == 0 ? "GPS is off"
++                                : noGps        ? "No GPS"
++                                               : "GPS not found");
++    lv_obj_set_style_text_color(locState, fix ? C_GREEN : gpsMode == 1 ? C_AMBER : C_MUTED, 0);
++    int n = snprintf(t, 24, "GPS: %s", gpsMode == 1 ? "on" : gpsMode == 0 ? "off" : "not present");
++    if (fix)
++        n += snprintf(t + n, 64, mySats ? "\nFix: yes, %s ago\nSatellites: %u" : "\nFix: yes, %s ago", ago, (unsigned)mySats);
++    else if (gpsMode == 1)
++        n += snprintf(t + n, 64, myFixTime ? "\nFix: none (last %s ago)" : "\nFix: none yet\nNeeds a view of the sky", ago);
++    if (pos) {
++        n += snprintf(t + n, 64, "\n%s%.5f, %.5f", fix || gpsMode != 1 ? "" : "Last known:\n", me->lat / 1e7, me->lon / 1e7);
++        if (me->alt)
++            n += snprintf(t + n, 32, "\nAltitude: %d m", (int)me->alt);
++        char cb[80];
++        if (cityLabel(myNode, cb, sizeof(cb)))
++            snprintf(t + n, 84, "\n%s", cb); // "Town" or "12 km NE of Town"
++    } else
++        snprintf(t + n, 32, "\nNo position yet");
++    lv_label_set_text(locInfo, t);
++
++    // nothing to show without a position, no switch without a receiver. Only a position the radio has sent
++    // since it started goes out: the one stored in the node list may be days old, and the radio itself
++    // holds that back too (sharing it would also make the radio take it as current).
++    lv_obj_set_state(locMapBtn, LV_STATE_DISABLED, !pos);
++    lv_obj_set_state(locSendBtn, LV_STATE_DISABLED, !pos || !myFixTime);
++    lv_obj_set_state(locGpsBtn, LV_STATE_DISABLED, noGps);
++    if (!lv_obj_has_state(locGpsBtn, LV_STATE_USER_1))
++        setButtonText(locGpsBtn, noGps          ? LV_SYMBOL_POWER " No GPS"
++                                 : gpsMode == 1 ? LV_SYMBOL_POWER " Turn GPS off"
++                                                : LV_SYMBOL_POWER " Turn GPS on");
++}
++
++void HopticsUI::openLocation(void)
++{
++    if (!locOv)
++        return;
++    refreshLocation();
++    lv_obj_scroll_to_y(lv_obj_get_child(locOv, 1), 0, LV_ANIM_OFF);
++    lv_obj_remove_flag(locOv, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_to_index(locOv, -1);
++    lv_obj_move_to_index(toast, -1);
++    // keys start on the first button that can do something (else on Back)
++    lv_obj_t *first = lv_obj_get_child(lv_obj_get_child(locOv, 0), 0);
++    for (lv_obj_t *b : {locGpsBtn, locSendBtn, locMapBtn})
++        if (!lv_obj_has_state(b, LV_STATE_DISABLED))
++            first = b;
++    keyScope(first);
++}
++
++void HopticsUI::closeLocation(void)
++{
++    if (!locOv || lv_obj_has_flag(locOv, LV_OBJ_FLAG_HIDDEN))
++        return;
++    lv_obj_add_flag(locOv, LV_OBJ_FLAG_HIDDEN);
++    keyScope();
++}
++
++// the location key's long press, and the card's GPS button
++void HopticsUI::toggleGps(void)
++{
++    if (gpsMode < 0 || (gpsMode == 2 && !hoptics::board::kGps)) {
++        showToast(LV_SYMBOL_GPS " No GPS on this radio");
++        return;
++    }
++    const bool on = gpsMode != 1;
++    if (cbs.setGps)
++        cbs.setGps(on);
++    gpsMode = on ? 1 : 0; // a second press before the restart turns it back
++    showToast(on ? LV_SYMBOL_GPS " Turning GPS on... the radio restarts" : LV_SYMBOL_GPS " Turning GPS off... the radio restarts",
++              6000);
++}
++
 +// ================================================================= KEYS
 +// Keyboard and trackball navigation: T-Deck Plus (keyboard + trackball), ThinkNode M9 (keyboard), and any
 +// board with an LVGL keypad or encoder input device. Everything a finger can do, keys can do.
@@ -9445,7 +9646,7 @@ index 0000000..dcfc631
 +        lv_obj_t *c = lv_obj_get_child(mainScreen, i);
 +        if (lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN))
 +            continue;
-+        if (c == chatOv || c == nodeOv || c == envOv || c == setOv || c == repOv || c == wizOv)
++        if (c == chatOv || c == nodeOv || c == envOv || c == setOv || c == repOv || c == wizOv || c == locOv)
 +            return c;
 +    }
 +    return nullptr;
@@ -9588,6 +9789,8 @@ index 0000000..dcfc631
 +        closeSettings();
 +    else if (ov == repOv)
 +        closeReport();
++    else if (ov == locOv)
++        closeLocation();
 +    else if (ov == wizOv) {
 +        if (wizStep > 0)
 +            wizardStep(wizStep - 1); // the wizard is only left with Skip or Finish
@@ -9615,8 +9818,22 @@ index 0000000..dcfc631
 +    }
 +    if (wizOv && !lv_obj_has_flag(wizOv, LV_OBJ_FLAG_HIDDEN))
 +        return; // first-time setup is finished (or skipped) on its own page
++    if (c == KEY_GPS) {
++        toggleGps();
++        return;
++    }
++    if (c == KEY_LOCATION) {
++        // on top of whatever is showing, which comes back when it closes; the key again closes it
++        if (lv_obj_has_flag(locOv, LV_OBJ_FLAG_HIDDEN)) {
++            hideKeyboard();
++            openLocation();
++        } else
++            closeLocation();
++        return;
++    }
 +    // jump straight there from anywhere
 +    hideKeyboard();
++    closeLocation();
 +    if (!lv_obj_has_flag(chatOv, LV_OBJ_FLAG_HIDDEN) && c != KEY_COMPOSE)
 +        closeChat();
 +    if (!lv_obj_has_flag(nodeOv, LV_OBJ_FLAG_HIDDEN))
@@ -9811,10 +10028,10 @@ index 0000000..dcfc631
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..2cd8723
+index 0000000..9a26c81
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,789 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -9836,6 +10053,7 @@ index 0000000..2cd8723
 +#include <cstdio>
 +#include <cstring>
 +#include <ctime>
++#include <utility>
 +#if defined(ARDUINO_ARCH_ESP32)
 +#include "esp_random.h"
 +#endif
@@ -9860,8 +10078,25 @@ index 0000000..2cd8723
 +    return gui;
 +}
 +
++namespace
++{
++// Asks the radio to broadcast its own position now (Hoptics MT firmware: heartbeat nonce 2, see PacketAPI.cpp). The
++// radio sends what its GPS has, on the first channel that shares position, trimmed to that channel's precision.
++class HopticsController : public ViewController
++{
++  public:
++    bool requestPositionBroadcast()
++    {
++        if (!client || !client->isConnected())
++            return false;
++        client->send(meshtastic_ToRadio{.which_payload_variant = meshtastic_ToRadio_heartbeat_tag, .heartbeat{.nonce = 2}});
++        return true;
++    }
++};
++} // namespace
++
 +HopticsView::HopticsView(const DisplayDriverConfig *cfg, DisplayDriver *driver)
-+    : MeshtasticView(cfg, driver, new ViewController)
++    : MeshtasticView(cfg, driver, new HopticsController)
 +{
 +}
 +
@@ -10210,6 +10445,12 @@ index 0000000..2cd8723
 +        controller->sendConfig(meshtastic_Config_PositionConfig{p}, ownNode); // the radio saves and restarts
 +        armRebootFallback();
 +    };
++    cb.sendPosition = [this](int32_t, int32_t, int32_t) {
++        for (uint8_t ch = 0; ch < 8; ch++) // only if some channel shares position (the radio's own rule)
++            if (posPrecision[ch])
++                return static_cast<HopticsController *>(controller)->requestPositionBroadcast();
++        return false;
++    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
 +    // Keyboards that go through device-ui's input policy (ThinkNode M9) have UP / DOWN turned into
@@ -10226,14 +10467,23 @@ index 0000000..2cd8723
 +    };
 +    ui.setCallbacks(cb);
 +
-+    // the M9's dedicated keys (Home, Chat, Map, Preset) arrive as commands from the same input policy
++    // the M9's dedicated keys (Home, Chat, Map, Preset, location) arrive as commands from the same input policy.
++    // They are dispatched inside the keyboard read, ahead of the wake guard: a press on a dark screen only
++    // wakes it (the driver already counted it as activity), like any other key.
 +    using input_policy::UICommand;
 +    auto &keys = input_policy::UICommandDispatcher::instance();
-+    keys.registerHandler(UICommand::GoHome, [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_HOME); });
-+    keys.registerHandler(UICommand::OpenChats, [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_CHATS); });
-+    keys.registerHandler(UICommand::OpenMap, [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_MAP); });
-+    keys.registerHandler(UICommand::QuickChat,
-+                         [this](const input_policy::CommandPayload &) { ui.keyCommand(HopticsUI::KEY_COMPOSE); });
++    const std::pair<UICommand, HopticsUI::KeyCommand> map[] = {
++        {UICommand::GoHome, HopticsUI::KEY_HOME},       {UICommand::OpenChats, HopticsUI::KEY_CHATS},
++        {UICommand::OpenMap, HopticsUI::KEY_MAP},       {UICommand::QuickChat, HopticsUI::KEY_COMPOSE},
++        {UICommand::SendPing, HopticsUI::KEY_LOCATION}, // short press: the Location card
++        {UICommand::ToggleGps, HopticsUI::KEY_GPS}};    // long press: GPS on / off
++    for (const auto &m : map) {
++        const HopticsUI::KeyCommand k = m.second;
++        keys.registerHandler(m.first, [this, k](const input_policy::CommandPayload &) {
++            if (!(displaydriver && displaydriver->isPowersaving()))
++                ui.keyCommand(k);
++        });
++    }
 +}
 +
 +// ---------------------------------------------------------------- radio -> UI
@@ -10275,7 +10525,7 @@ index 0000000..2cd8723
 +
 +void HopticsView::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon, int32_t alt, uint32_t sats, uint32_t precision)
 +{
-+    ui.updatePosition(nodeNum, lat, lon, alt);
++    ui.updatePosition(nodeNum, lat, lon, alt, sats);
 +}
 +
 +void HopticsView::updateMetrics(uint32_t nodeNum, const meshtastic_DeviceMetrics &m)
@@ -10330,6 +10580,10 @@ index 0000000..2cd8723
 +{
 +    if (ch.index == 0 && ch.has_settings)
 +        strncpy(channel0Name, ch.settings.name, sizeof(channel0Name) - 1);
++    if (ch.index < 8) // no module settings: the radio shares no position there either
++        posPrecision[ch.index] = ch.role != meshtastic_Channel_Role_DISABLED && ch.has_settings && ch.settings.has_module_settings
++                                     ? ch.settings.module_settings.position_precision
++                                     : 0;
 +    ui.setChannel((uint8_t)ch.index, ch.has_settings ? ch.settings.name : "", ch.role != meshtastic_Channel_Role_DISABLED);
 +    if (ch.index == 0)
 +        pushRadioInfo();
