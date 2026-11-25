@@ -7,6 +7,9 @@ For every board it finds a factory image for, it writes site/firmware/<board>/ w
 manifest. The factory image is split around the NVS partition (read from the image's own partition
 table), so an update that does NOT erase keeps NVS: the Hoptics screen settings (units, temperature
 correction, map, boot picture) and Bluetooth pairings. A new install with "Erase" still gets a clean chip.
+
+Only boards whose site/nodes.json "status" is "available" are published: a board still in testing gets no
+files on the site, even if the release happens to contain its images.
 """
 import glob
 import hashlib
@@ -20,13 +23,18 @@ import sys
 BOARDS = {
     "heltec-v4-expansion-kit": "Heltec V4 Expansion Kit",
     "heltec-v4-r8-expansion-kit-v2": "Heltec V4-R8 Expansion Kit V2",
+    # in progress (nodes.json "soon" until tested on the hardware; "-mt" = the Meshtastic build)
+    "lilygo-t-deck-plus-mt": "LilyGO T-Deck Plus",
+    "elecrow-thinknode-m9-mt": "Elecrow ThinkNode M9",
 }
 
 src, site, tag = sys.argv[1], sys.argv[2], sys.argv[3]
 
 # Boards listed on the website (site/nodes.json) are built too, if the release has a factory image for them.
+status = {}
 try:
     for n in json.load(open(os.path.join(site, "nodes.json")))["nodes"]:
+        status[n["id"]] = n.get("status", "available")
         if n.get("flash", "esp") == "esp":
             BOARDS.setdefault(n["id"], n["name"])
 except (OSError, ValueError, KeyError) as e:
@@ -74,7 +82,13 @@ info = {"tag": tag, "boards": {}}
 ota = os.path.join(src, "mt-esp32s3-ota.bin")
 
 for board, title in BOARDS.items():
-    found = glob.glob(os.path.join(src, f"hoptics-mt-{board}-mt*.factory.bin"))
+    if status.get(board, "available") != "available":
+        print(f"{board} is '{status[board]}' in nodes.json, not published")
+        continue
+    # exact name match: a glob like "<board>-mt*" would also catch "<board>-mt-mt2.8.3" of a longer id
+    pattern = re.compile(rf"hoptics-mt-{re.escape(board)}-mt[0-9.]+\.factory\.bin")
+    found = sorted(f for f in glob.glob(os.path.join(src, "hoptics-mt-*.factory.bin"))
+                   if pattern.fullmatch(os.path.basename(f)))
     if not found:
         print(f"no factory image for {board}, skipped")
         continue

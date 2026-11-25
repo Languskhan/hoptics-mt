@@ -22,6 +22,26 @@
       "flash": "esp"
     },
     {
+      "id": "lilygo-t-deck-plus-mt",
+      "name": "LilyGO T-Deck Plus",
+      "detail": "Keyboard handheld with trackball, touch screen and GPS. In testing.",
+      "firmware": "Hoptics MT",
+      "platform": "meshtastic",
+      "status": "soon",
+      "beta": true,
+      "flash": "esp"
+    },
+    {
+      "id": "elecrow-thinknode-m9-mt",
+      "name": "Elecrow ThinkNode M9",
+      "detail": "Keyboard handheld with a 2.4\" screen and GPS. In testing.",
+      "firmware": "Hoptics MT",
+      "platform": "meshtastic",
+      "status": "soon",
+      "beta": true,
+      "flash": "esp"
+    },
+    {
       "id": "crowpanel-advance-10",
       "name": "CrowPanel Advance 10.1\"",
       "detail": "ESP32-P4 big-screen display with LoRa.",
