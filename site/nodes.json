@@ -1,0 +1,41 @@
+{
+  "_help": "One entry per node. To add a node, copy an entry and change it. status: available | soon. platform: meshtastic | meshcore. flash: esp (browser flasher, ESP32 boards) | uf2 (nRF52 boards: download and drag onto the drive). The 'id' must match the firmware folder name the release builds (site/firmware/<id>/).",
+  "nodes": [
+    {
+      "id": "heltec-v4-expansion-kit",
+      "name": "Heltec V4 Expansion Kit",
+      "detail": "WiFi LoRa 32 V4 in the 2.8\" touch case. If your board says V4-R8, pick the next one.",
+      "firmware": "Hoptics MT",
+      "platform": "meshtastic",
+      "status": "available",
+      "flash": "esp"
+    },
+    {
+      "id": "heltec-v4-r8-expansion-kit-v2",
+      "name": "Heltec V4-R8 Expansion Kit V2",
+      "detail": "The newer touch kit with an SD slot and 8 MB PSRAM.",
+      "firmware": "Hoptics MT",
+      "platform": "meshtastic",
+      "status": "available",
+      "flash": "esp"
+    },
+    {
+      "id": "crowpanel-advance-10",
+      "name": "CrowPanel Advance 10.1\"",
+      "detail": "ESP32-P4 big-screen display with LoRa.",
+      "firmware": "Hoptics",
+      "platform": "meshcore",
+      "status": "soon",
+      "flash": "esp"
+    },
+    {
+      "id": "lilygo-t-deck-plus",
+      "name": "LilyGO T-Deck Plus",
+      "detail": "Keyboard handheld with trackball and GPS.",
+      "firmware": "Hoptics",
+      "platform": "meshcore",
+      "status": "soon",
+      "flash": "esp"
+    }
+  ]
+}

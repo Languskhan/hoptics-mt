@@ -1,0 +1,23 @@
+{
+  "_help": "Newest first. Keep them short and vague. tag: released | progress | coming.",
+  "updates": [
+    {
+      "date": "Nov 2026",
+      "tag": "released",
+      "title": "New themes for day and night",
+      "text": "Daylight, night-red and amber themes are in. Easier to read in the sun and easier on the eyes after dark."
+    },
+    {
+      "date": "Nov 2026",
+      "tag": "progress",
+      "title": "Hoptics for MeshCore",
+      "text": "A big-screen version for the CrowPanel 10.1 is being built. More to share soon."
+    },
+    {
+      "date": "Later",
+      "tag": "coming",
+      "title": "More nodes",
+      "text": "Support for more handhelds is on the way, starting with the T-Deck Plus."
+    }
+  ]
+}

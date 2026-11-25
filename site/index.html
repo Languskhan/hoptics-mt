@@ -3,125 +3,169 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hoptics MT - one-click installer</title>
-<meta name="description" content="Install Hoptics MT, a touch UI for Meshtastic on the Heltec V4 and V4-R8 Expansion Kits, from your browser.">
-<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
-<style>
-body{margin:0;background:#0a0f14;color:#e6edf3;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-main{max-width:860px;margin:auto;padding:24px}
-h1{letter-spacing:3px;margin:8px 0 0}
-.tag{color:#8695a5;margin:0 0 6px}
-.ver{color:#22d3ee;font-size:14px;margin:0 0 20px;min-height:21px}
-.card{background:#131b24;border:1px solid #243141;border-radius:14px;padding:18px;margin:14px 0}
-.card h2{margin:0 0 4px;font-size:18px}
-.muted{color:#8695a5;font-size:14px}
-ol li,ul li{margin:6px 0}
-esp-web-install-button button{background:#22d3ee;color:#0a0f14;border:0;border-radius:10px;padding:12px 22px;font-weight:700;font-size:16px;cursor:pointer}
-esp-web-install-button button:hover{background:#67e8f9}
-code{background:#1b2531;padding:1px 6px;border-radius:5px}
-img{max-width:100%;border-radius:10px;margin-top:10px}
-a{color:#22d3ee}
-.warn{border-color:#fbbf24}
-.files{font-size:13px;margin-top:10px}
-.files a{margin-right:14px}
-.unsupported{border-color:#f87171;display:none}
-footer{color:#8695a5;font-size:13px;margin:24px 0}
-</style>
+<title>Hoptics: touch firmware for mesh radios</title>
+<meta name="description" content="Hoptics is custom touch firmware for Meshtastic and MeshCore nodes: live traffic, maps, chat and stats on the device. Flash it from your browser.">
+<meta name="theme-color" content="#0a0f14">
+<meta property="og:title" content="Hoptics: touch firmware for mesh radios">
+<meta property="og:description" content="Live traffic, maps, chat and stats on the device itself. Pick your node and flash it from your browser.">
+<meta property="og:image" content="https://languskhan.github.io/hoptics-mt/img/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
 </head>
 <body>
-<main>
-<h1>HOPTICS MT</h1>
-<p class="tag">A touch UI for Meshtastic on the Heltec 2.8" touch kits. Install from your browser in about a minute.</p>
-<p class="ver" id="ver"></p>
-
-<div class="card unsupported" id="nobrowser">
-<h2>This browser can't install firmware</h2>
-<p>Open this page in <b>Chrome</b> or <b>Edge</b> on a computer (Windows, Mac, Linux or ChromeOS).
-Firefox, Safari, phones and tablets can't talk to USB devices this way.</p>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+<div class="wrap">
+<nav aria-label="Main">
+<a class="brand" href="./"><img src="img/logo.svg" width="32" height="32" alt="">HOPTICS</a>
+<div class="links">
+<a href="#features">Features</a>
+<a href="#updates">Updates</a>
+<a href="#firmware">Firmware</a>
+<a href="flash.html">Flasher</a>
+<a href="https://github.com/Languskhan/hoptics-mt">GitHub</a>
 </div>
-
-<div class="card">
-<h2>Before you start</h2>
-<ol>
-<li>Use <b>Chrome</b> or <b>Edge</b> on a computer.</li>
-<li>Plug the kit in with a USB-C cable that carries <b>data</b> (some cables only charge).</li>
-<li>Click the button for your kit and pick the port that appears (often "USB JTAG/serial debug unit").</li>
-<li>If it can't connect: hold <b>USER</b>, tap <b>RST</b>, let go of <b>USER</b>, and try again.</li>
-</ol>
+<a class="btn" href="flash.html">Flash a node</a>
+</nav>
 </div>
+</header>
 
-<div class="card">
-<h2>Heltec V4 Expansion Kit (original, touch)</h2>
-<p class="muted">WiFi LoRa 32 V4 in the 2.8" touch case. If your board says <b>V4-R8</b>, use the next one.</p>
-<esp-web-install-button manifest="firmware/heltec-v4-expansion-kit/manifest.json">
-  <button slot="activate">Install for V4 kit</button>
-  <span slot="unsupported">Your browser can't flash devices. Use Chrome or Edge on a computer.</span>
-  <span slot="not-allowed">This page must be opened over https.</span>
-</esp-web-install-button>
-<div class="files" data-board="heltec-v4-expansion-kit"></div>
+<main id="main">
+<section class="hero">
+<div class="wrap hero-in">
+<div class="copy">
+<p class="kicker mono">MESHTASTIC · MESHCORE · TOUCH FIRMWARE</p>
+<h1>A better screen for your <span class="hl">mesh radio</span>.</h1>
+<p class="lead">Hoptics is custom touch firmware for mesh nodes. Live traffic, maps, chat and stats right on the device, no phone required. Pick your node, flash it from your browser, and you're on the air in about a minute.</p>
+<div class="row">
+<a class="btn big" href="flash.html">Flash a node</a>
+<a class="btn big ghost" href="#firmware">Download firmware</a>
 </div>
-
-<div class="card">
-<h2>Heltec V4-R8 Expansion Kit V2 (touch, SD slot)</h2>
-<p class="muted">The newer kit with the V4-R8 board (8 MB PSRAM). It has a different pinout and its own build.</p>
-<esp-web-install-button manifest="firmware/heltec-v4-r8-expansion-kit-v2/manifest.json">
-  <button slot="activate">Install for V4-R8 kit</button>
-  <span slot="unsupported">Your browser can't flash devices. Use Chrome or Edge on a computer.</span>
-  <span slot="not-allowed">This page must be opened over https.</span>
-</esp-web-install-button>
-<div class="files" data-board="heltec-v4-r8-expansion-kit-v2"></div>
-</div>
-
-<div class="card warn">
-<h2>Erase or not?</h2>
-<p><b>First time on Hoptics</b> (coming from stock Meshtastic, another firmware, or a new kit): tick <b>Erase</b>.
-You get a clean start and new encryption keys (some factory images shipped with duplicate keys, see
-CVE-2025-52464). After it boots, the setup wizard asks for your region and name.</p>
-<p><b>Updating Hoptics:</b> leave Erase <b>unticked</b>. Your radio settings, nodes and messages are kept, and so are
-the screen's own settings (units, temperature correction, theme) and Bluetooth pairings.</p>
-</div>
-
-<div class="card">
-<h2>After install</h2>
-<ul>
-<li>Pick your <b>region</b> in the setup wizard. The radio stays silent until you do.</li>
-<li>Phone app: Settings, then Phone app, then Bluetooth on. Pair with the PIN shown on screen.</li>
-<li>On Wi-Fi? Open <code>http://&lt;node-ip&gt;/hoptics</code> for the live dashboard.</li>
-<li>Want stock Meshtastic back? Use <a href="https://flasher.meshtastic.org">flasher.meshtastic.org</a> as usual.</li>
+<ul class="facts">
+<li>Free and open source</li>
+<li>Installs from Chrome or Edge</li>
+<li id="ver">Built on Meshtastic</li>
 </ul>
-<img src="screenshots/preview.png" alt="Hoptics MT screens">
 </div>
+<div class="shots" aria-hidden="false">
+<figure class="device"><img src="img/home.png" width="480" height="640" alt="Hoptics Home screen: nodes online, channel use, airtime and mesh activity"></figure>
+<figure class="device lower"><img src="img/map.png" width="480" height="640" alt="Hoptics Map screen with live packet pings around your node"></figure>
+</div>
+</div>
+</section>
 
-<footer>
-Something not right? Use <b>Settings, DEVICE, Report a problem</b> on the radio, or
-<a href="https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml">open an issue</a>.
-Source, release notes and the PDF guide: <a href="https://github.com/Languskhan/hoptics-mt">github.com/Languskhan/hoptics-mt</a>.
-Like it? <a href="https://buymeacoffee.com/Bluffs">Buy me a coffee</a>.<br><br>
-Hoptics MT is a personal project, not affiliated with Meshtastic. GPL-3.0. Built on Meshtastic firmware and device-ui.
-City data from GeoNames (CC BY 4.0).
-</footer>
+<section class="block" id="features">
+<div class="wrap">
+<p class="eyebrow mono">WHAT YOU GET</p>
+<h2>Everything the mesh is doing, at a glance</h2>
+<div class="grid features">
+<article class="feature">
+<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+<h3>Live traffic</h3>
+<p>Every packet as it's heard: who sent it, what it is, how many hops, and the signal. Filter RF or MQTT.</p>
+</article>
+<article class="feature">
+<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+<h3>Map with pings</h3>
+<p>Nodes plotted on a street map with range rings. Each packet pings its sender so you can see where traffic comes from.</p>
+</article>
+<article class="feature">
+<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>
+<h3>Chat on the device</h3>
+<p>Channels and direct messages with an on-screen keyboard, delivery ticks and message pop-ups.</p>
+</article>
+<article class="feature">
+<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+<h3>Stats and graphs</h3>
+<p>Channel load, airtime, packets per minute, signal history and the top talkers on your mesh.</p>
+</article>
+<article class="feature">
+<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/></svg>
+<h3>Themes for any light</h3>
+<p>Dark, daylight for full sun, night-red to keep your night vision, and amber.</p>
+</article>
+<article class="feature">
+<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
+<h3>Easy to install</h3>
+<p>Flash from the browser, then a setup wizard asks for your region, name and theme. No phone app needed.</p>
+</article>
+</div>
+</div>
+</section>
+
+<section class="block gallery-band" aria-labelledby="gallery-h">
+<div class="wrap">
+<p class="eyebrow mono">ON THE DEVICE</p>
+<h2 id="gallery-h">Real screens, four themes</h2>
+<div class="gallery">
+<figure><img src="img/02_live.png" width="480" height="640" loading="lazy" alt="Live tab listing packets as they arrive"><figcaption>Live</figcaption></figure>
+<figure><img src="img/20_home_daylight.png" width="480" height="640" loading="lazy" alt="Home screen in the daylight theme"><figcaption>Daylight</figcaption></figure>
+<figure><img src="img/06_chat.png" width="480" height="640" loading="lazy" alt="Channel chat with message bubbles"><figcaption>Chat</figcaption></figure>
+<figure><img src="img/20_home_nightred.png" width="480" height="640" loading="lazy" alt="Home screen in the night-red theme"><figcaption>Night-red</figcaption></figure>
+<figure><img src="img/21_stats_amber.png" width="480" height="640" loading="lazy" alt="Stats screen in the amber theme"><figcaption>Amber</figcaption></figure>
+<figure><img src="img/08_node.png" width="480" height="640" loading="lazy" alt="Node detail with signal and position"><figcaption>Node detail</figcaption></figure>
+</div>
+</div>
+</section>
+
+<section class="block" id="updates">
+<div class="wrap">
+<div class="head">
+<div>
+<p class="eyebrow mono">UPDATES</p>
+<h2>What's happening</h2>
+</div>
+<a class="date" href="https://github.com/Languskhan/hoptics-mt/releases">Full release notes on GitHub →</a>
+</div>
+<div class="grid updates" id="update-list"></div>
+</div>
+</section>
+
+<section class="block" id="firmware">
+<div class="wrap">
+<p class="eyebrow mono">FIRMWARE</p>
+<h2>Firmware by node</h2>
+<p class="sub">Choose your node. Flash it in the browser, or download the files to flash by hand.</p>
+<div class="chips" role="group" aria-label="Filter by firmware">
+<button type="button" class="chip" data-filter="all" aria-pressed="true">All nodes</button>
+<button type="button" class="chip" data-filter="meshtastic" aria-pressed="false">Meshtastic</button>
+<button type="button" class="chip" data-filter="meshcore" aria-pressed="false">MeshCore</button>
+</div>
+<div class="grid nodes" id="node-list"><p class="sub">Loading the node list…</p></div>
+</div>
+</section>
+
+<section class="block">
+<div class="wrap">
+<div class="steps-band">
+<div class="sb"><span class="num mono">01</span><h3>Pick your node</h3><p>Choose your board on the flasher page.</p></div>
+<div class="sb"><span class="num mono">02</span><h3>Plug in and click</h3><p>Use a data USB-C cable and Chrome or Edge.</p></div>
+<div class="sb"><span class="num mono">03</span><h3>Set your region</h3><p>The setup wizard gets you on the air.</p></div>
+<a class="btn big" href="flash.html">Open the flasher</a>
+</div>
+</div>
+</section>
 </main>
-<script>
-// Web Serial is what the installer needs; say so up front instead of after a click.
-if (!('serial' in navigator)) document.getElementById('nobrowser').style.display = 'block';
-fetch('firmware/version.json', {cache: 'no-store'}).then(r => r.json()).then(v => {
-  const any = Object.values(v.boards)[0];
-  document.getElementById('ver').textContent =
-    'Version ' + v.tag + (any ? ' · Meshtastic ' + any.meshtastic : '');
-  for (const el of document.querySelectorAll('.files')) {
-    const b = v.boards[el.dataset.board];
-    if (!b) { el.textContent = 'Not in this release.'; continue; }
-    const base = 'firmware/' + el.dataset.board + '/';
-    el.innerHTML = '';
-    el.append('Flash by hand: ');
-    for (const [label, f] of [['factory image (0x0)', b.factory], ['update image (0x10000)', b.update]]) {
-      if (!f) continue;
-      const a = document.createElement('a');
-      a.href = base + f; a.textContent = label; a.download = f;
-      el.append(a);
-    }
-  }
-}).catch(() => {});
-</script>
+
+<footer class="site">
+<div class="wrap foot">
+<div class="fbrand">
+<a class="brand" href="./"><img src="img/logo.svg" width="28" height="28" alt="">HOPTICS</a>
+<p>A personal project by Bluffs (KO6FPT). Not affiliated with Meshtastic or MeshCore. GPL-3.0. City data from GeoNames (CC BY 4.0).</p>
+</div>
+<div class="fl">
+<a href="flash.html">Flasher</a>
+<a href="https://github.com/Languskhan/hoptics-mt">GitHub</a>
+<a href="https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml">Report a problem</a>
+<a href="https://buymeacoffee.com/Bluffs">Buy me a coffee</a>
+</div>
+</div>
+</footer>
 </body>
 </html>

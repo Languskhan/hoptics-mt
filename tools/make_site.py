@@ -24,6 +24,14 @@ BOARDS = {
 
 src, site, tag = sys.argv[1], sys.argv[2], sys.argv[3]
 
+# Boards listed on the website (site/nodes.json) are built too, if the release has a factory image for them.
+try:
+    for n in json.load(open(os.path.join(site, "nodes.json")))["nodes"]:
+        if n.get("flash", "esp") == "esp":
+            BOARDS.setdefault(n["id"], n["name"])
+except (OSError, ValueError, KeyError) as e:
+    print(f"nodes.json not used: {e}")
+
 
 def partitions(image):
     """(name, type, subtype, offset, size) from the partition table at 0x8000 of a factory image."""
