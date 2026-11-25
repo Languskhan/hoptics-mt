@@ -314,7 +314,7 @@ index 3590cfd..c842070 100644
          if (!programmingMode) {
              // in programmingMode we don't send any packets to the client except this one notify
 diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
-index 7f9fbc4..b0dc918 100644
+index 7f9fbc4..0bfe761 100644
 --- a/src/mesh/http/ContentHandler.cpp
 +++ b/src/mesh/http/ContentHandler.cpp
 @@ -38,6 +38,25 @@
@@ -455,7 +455,7 @@ index 7f9fbc4..b0dc918 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
      // res->setHeader("Content-Type", "text/html");
  
-@@ -924,3 +955,43 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+@@ -924,3 +955,61 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
      writeAll(res, out);
  }
  #endif
@@ -498,7 +498,101 @@ index 7f9fbc4..b0dc918 100644
 +    res->setHeader("Content-Type", "application/json");
 +    res->write((const uint8_t *)snap.data(), snap.size());
 +}
++
++static void handleHopticsRoot(HTTPRequest *req, HTTPResponse *res)
++{
++    hopticsSecurityHeaders(res);
++    res->setStatusCode(302);
++    res->setHeader("Location", "/hoptics");
++    res->setHeader("Content-Type", "text/plain");
++    res->print("Hoptics MT dashboard: /hoptics");
++}
++
++// Dashboard-only server for the colour UI: the page, its JSON and a redirect from "/". Nothing that
++// can change the radio (no /api/v1, no uploads, no reboot), so the radio is safe on a shared network.
++void registerHopticsHandlers(HTTPServer *server)
++{
++    server->registerNode(new ResourceNode("/hoptics", "GET", &handleHopticsPage));
++    server->registerNode(new ResourceNode("/json/hoptics", "GET", &handleHopticsJson));
++    server->registerNode(new ResourceNode("/", "GET", &handleHopticsRoot));
++}
 +#endif
+diff --git a/src/mesh/http/ContentHandler.h b/src/mesh/http/ContentHandler.h
+index 700ef78..26e66a8 100644
+--- a/src/mesh/http/ContentHandler.h
++++ b/src/mesh/http/ContentHandler.h
+@@ -1,5 +1,8 @@
+ #pragma once
+ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer);
++#if defined(HOPTICS_UI)
++void registerHopticsHandlers(HTTPServer *server);
++#endif
+ 
+ // Declare some handler functions for the various URLs on the server
+ void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res);
+diff --git a/src/mesh/http/WebServer.cpp b/src/mesh/http/WebServer.cpp
+index 17432ab..6fda98e 100644
+--- a/src/mesh/http/WebServer.cpp
++++ b/src/mesh/http/WebServer.cpp
+@@ -331,6 +331,28 @@ int32_t WebServerThread::runOnce()
+     return getAdaptiveInterval();
+ }
+ 
++#if defined(HOPTICS_UI)
++// Hoptics MT: stock firmware never starts the web server when the colour UI is in use. Start a small
++// plain-HTTP server with just the read-only dashboard (/hoptics, /json/hoptics): no TLS session memory
++// and no radio API, so it is cheap on RAM and can't be used to change the radio.
++void initHopticsWebServer()
++{
++    if (insecureServer)
++        return;
++    LOG_INFO("Start Hoptics dashboard on port 80 (/hoptics)");
++    secureServer = nullptr;
++    insecureServer = new HTTPServer(80, 3);
++    registerHopticsHandlers(insecureServer);
++    insecureServer->start();
++    if (insecureServer->isRunning()) {
++        LOG_INFO("Hoptics dashboard ready");
++        isWebServerReady = true;
++    } else {
++        LOG_ERROR("Hoptics dashboard failed to start");
++    }
++}
++#endif
++
+ void initWebServer()
+ {
+     LOG_DEBUG("Init Web Server");
+diff --git a/src/mesh/http/WebServer.h b/src/mesh/http/WebServer.h
+index 762afc6..3a7224f 100644
+--- a/src/mesh/http/WebServer.h
++++ b/src/mesh/http/WebServer.h
+@@ -9,6 +9,9 @@
+ 
+ void initWebServer();
+ void createSSLCert();
++#if defined(HOPTICS_UI)
++void initHopticsWebServer();
++#endif
+ 
+ class WebServerThread : private concurrency::OSThread
+ {
+diff --git a/src/mesh/wifi/WiFiAPClient.cpp b/src/mesh/wifi/WiFiAPClient.cpp
+index 8f53187..b02e67d 100644
+--- a/src/mesh/wifi/WiFiAPClient.cpp
++++ b/src/mesh/wifi/WiFiAPClient.cpp
+@@ -240,6 +240,11 @@ static void onNetworkConnected()
+         if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+             initWebServer();
+         }
++#if defined(HOPTICS_UI)
++        else {
++            initHopticsWebServer(); // read-only dashboard only (see WebServer.cpp)
++        }
++#endif
+ #endif
+ #if !MESHTASTIC_EXCLUDE_SOCKETAPI
+         if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
 diff --git a/src/modules/ExternalNotificationModule.cpp b/src/modules/ExternalNotificationModule.cpp
 index 704813c..13bb361 100644
 --- a/src/modules/ExternalNotificationModule.cpp
