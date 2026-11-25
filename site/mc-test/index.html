@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Hoptics-MC test builds</title>
+<link rel="icon" href="../img/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../style.css">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+.tb{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:24px}
+.tb .card h3{margin-top:4px}
+.warnbox{margin-top:24px;border:1px solid #7c3a12;background:#1f150b;color:#fed7aa;border-radius:14px;padding:16px 20px}
+.warnbox b{color:#fb923c}
+.ver{font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="site"><div class="wrap"><nav aria-label="Main"><a class="brand" href="../"><img src="../img/logo.svg" width="32" height="32" alt="">HOPTICS</a></nav></div></header>
+<main class="wrap" style="padding-top:40px;padding-bottom:60px">
+<p class="eyebrow mono">UNLISTED TEST PAGE</p>
+<h1 style="font-size:36px">Hoptics-MC test builds</h1>
+<p class="sub">The Hoptics screens on <b>MeshCore</b>, companion role. Early alpha for hardware testing.</p>
+<div class="warnbox"><b>Read first.</b> These are untested alpha builds. Installing one <b>erases the radio</b>: its MeshCore
+identity (keys), contacts and channels are wiped, and it starts as a new node. If you want to keep an existing MeshCore
+identity, export its private key in the MeshCore app first. To go back, flash any firmware from
+<a href="https://flasher.meshcore.io" style="color:#fdba74">flasher.meshcore.io</a>.</div>
+<div class="tb">
+<article class="card">
+<h3>LilyGO T-Deck / T-Deck Plus</h3>
+<p class="ver mono" id="v-tdeck">companion</p>
+<p>Touch, keyboard and trackball. Hold the trackball down while plugging in if Chrome doesn't see it.</p>
+<esp-web-install-button manifest="tdeck/manifest.json"><button slot="activate" class="btn">Install on T-Deck</button></esp-web-install-button>
+</article>
+<article class="card">
+<h3>Elecrow ThinkNode M9</h3>
+<p class="ver mono" id="v-m9">companion</p>
+<p>Keys only: arrows move, Enter opens, Del goes back. Home / Time / FM / Preset jump to Home, Chats, Live and Nodes.</p>
+<esp-web-install-button manifest="m9/manifest.json"><button slot="activate" class="btn">Install on M9</button></esp-web-install-button>
+</article>
+</div>
+<p class="sub" style="margin-top:24px">Chrome or Edge on a computer, with a USB data cable. After installing, set your region preset in
+<b>More → Radio</b> so it matches your mesh, and pair the MeshCore app with the PIN shown under <b>More → Phone app</b>.</p>
+</main>
+</body>
+</html>
