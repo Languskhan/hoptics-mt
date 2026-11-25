@@ -48,8 +48,9 @@ is upstream Meshtastic 2.8.3, unchanged.
   for new messages. With MQTT set up, your own messages also show their **reach** (below).
 - **Reach check** (how far did my message get?): when the radio is on Wi-Fi and receiving your MQTT
   server's traffic, every gateway that hears one of your messages and uploads it sends a copy back.
-  Hoptics counts those copies: your message bubble shows `12 gw - 3 hops`, and tapping it shows how
-  many gateways heard it **directly, 1 hop, 2 hops...** out. It's deliberately light: only messages
+  Hoptics counts those copies: your message bubble shows `12 gw - 3 hops`, and tapping it (or **Reach**
+  at the top of the chat, for your latest message) shows how many gateways heard it **directly, 1 hop,
+  2 hops...** out. It's deliberately light: only messages
   sent from this screen are tracked, and the check costs one compare per MQTT packet. The **V4** keeps
   counts for its last 6 messages; the **V4-R8** (and the T-Deck Plus and ThinkNode M9 builds) keep the
   last 24 and also list **which gateways** heard each one. The web page has the full **Reach logger**.

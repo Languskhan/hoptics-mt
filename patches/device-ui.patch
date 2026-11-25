@@ -640,10 +640,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..2dc6820
+index 0000000..e364341
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,591 @@
+@@ -0,0 +1,593 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -1115,6 +1115,8 @@ index 0000000..2dc6820
 +    lv_obj_t *reachOv = nullptr, *reachOvTitle = nullptr, *reachText = nullptr, *reachSum = nullptr, *reachSub = nullptr,
 +             *reachBars = nullptr, *reachGw = nullptr, *reachHelp = nullptr;
 +    uint32_t reachId = 0, reachSeen = 0;
++    lv_obj_t *chatReachBtn = nullptr; // chat header: reach of the latest of your messages there
++    uint32_t chatReachId = 0;
 +    int lnaMode = 2; // not present until the radio says otherwise
 +    lv_obj_t *mainScreen = nullptr;
 +    lv_obj_t *statusTime = nullptr, *statusName = nullptr, *statusBatt = nullptr, *statusMsg = nullptr, *statusLink = nullptr,
@@ -3137,10 +3139,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..ab22e7c
+index 0000000..105ba19
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,6150 @@
+@@ -0,0 +1,6164 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -5423,6 +5425,12 @@ index 0000000..ab22e7c
 +void HopticsUI::buildChatOverlay(void)
 +{
 +    chatOv = overlayPanel("Chat", &chatTitle, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeChat(); });
++    // reach check: how far the latest of your messages here got (shows once it is being tracked)
++    chatReachBtn = flatButton(lv_obj_get_child(chatOv, 0), LV_SYMBOL_SHUFFLE " Reach", C_CYAN, 78, 28);
++    lv_obj_add_flag(chatReachBtn, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_add_event_cb(
++        chatReachBtn, [](lv_event_t *e) { HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e); ui->openReach(ui->chatReachId); },
++        LV_EVENT_CLICKED, this);
 +
 +    chatMsgs = plain(chatOv);
 +    lv_obj_set_width(chatMsgs, LV_PCT(100));
@@ -5555,15 +5563,23 @@ index 0000000..ab22e7c
 +{
 +    hoptics::ReachMsg m;
 +    char b[40];
++    chatReachId = 0;
 +    for (auto &r : bubbleRefs) {
 +        if (!r.reach || !hoptics::Reach::get().find(r.requestId, m))
 +            continue;
++        chatReachId = r.requestId; // the latest tracked one wins (bubbles are in time order)
 +        reachLine(m, b, sizeof(b));
 +        if (!b[0])
 +            continue;
 +        if (strcmp(lv_label_get_text(r.reach), b) != 0)
 +            lv_label_set_text(r.reach, b);
 +        lv_obj_remove_flag(r.reach, LV_OBJ_FLAG_HIDDEN);
++    }
++    if (chatReachBtn) {
++        if (chatReachId)
++            lv_obj_remove_flag(chatReachBtn, LV_OBJ_FLAG_HIDDEN);
++        else
++            lv_obj_add_flag(chatReachBtn, LV_OBJ_FLAG_HIDDEN);
 +    }
 +}
 +
@@ -6947,8 +6963,8 @@ index 0000000..ab22e7c
 +    lv_obj_t *cmq = card(body, "MQTT  -  REACH CHECK");
 +    {
 +        lv_obj_t *intro = label(cmq, FSMALL, C_MUTED,
-+                                "See how far your messages get: send one while connected, then tap your message "
-+                                "bubble. Gateways that upload it to your MQTT server are counted by hops.");
++                                "See how far your messages get: send one while connected, then tap Reach at the "
++                                "top of the chat. Gateways that upload it to your MQTT server are counted by hops.");
 +        lv_obj_set_width(intro, LV_PCT(100));
 +        lv_label_set_long_mode(intro, LV_LABEL_LONG_MODE_WRAP);
 +        for (int i = 0; i < 4; i++) {
@@ -6975,7 +6991,7 @@ index 0000000..ab22e7c
 +        lv_obj_t **ta;
 +        uint32_t max;
 +        bool secret;
-+    } mqf[4] = {{"Server  (blank = public Meshtastic)", &setMqttServer, 64, false},
++    } mqf[4] = {{"Server  (blank = public)", &setMqttServer, 64, false},
 +                {"Username", &setMqttUser, 63, false},
 +                {"Password", &setMqttPass, 63, true},
 +                {"Root topic  (e.g. msh/US)", &setMqttRoot, 31, false}};
