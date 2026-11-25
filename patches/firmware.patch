@@ -845,21 +845,23 @@ index 73a863d..3215a82 100644
 +  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 +  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 diff --git a/variants/esp32s3/heltec_v4_r8/platformio.ini b/variants/esp32s3/heltec_v4_r8/platformio.ini
-index bf7f08a..a07594e 100644
+index bf7f08a..828b8da 100644
 --- a/variants/esp32s3/heltec_v4_r8/platformio.ini
 +++ b/variants/esp32s3/heltec_v4_r8/platformio.ini
-@@ -136,7 +136,9 @@ build_flags =
+@@ -136,7 +136,11 @@ build_flags =
    -D SPI_MISO=LGFX_PIN_MISO
    -D SPI_CS=3
    -D SDCARD_CS=SPI_CS
 -  -D SD_SPI_FREQUENCY=SPI_FREQUENCY
-+  ; Hoptics MT: was SPI_FREQUENCY (75 MHz, the display clock). SD cards in SPI mode are only specified
-+  ; to 25 MHz. (The card still isn't readable on the V4-R8 kit: it answers commands but data reads fail.)
-+  -D SD_SPI_FREQUENCY=20000000
++  ; Hoptics MT: was SPI_FREQUENCY (75 MHz, the display clock). On the Expansion Kit V2 the card sits on the
++  ; display bus through the backboard (22R series resistors, 10K pull-ups to Vext, MISO on strapping pin
++  ; GPIO45): it answered commands at the 400 kHz init clock but every data read failed at 75 and at
++  ; 20 MHz. 4 MHz is Meshtastic's own default for SD cards (FSCommon.cpp).
++  -D SD_SPI_FREQUENCY=4000000U
  
  lib_deps = ${heltec_v4_r8_base.lib_deps}
    ${device-ui_base.lib_deps}
-@@ -148,6 +150,14 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
+@@ -148,6 +152,14 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
  custom_sdkconfig =
    ${esp32s3_base.custom_sdkconfig}
    ${device-ui_base.custom_sdkconfig}

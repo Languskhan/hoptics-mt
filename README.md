@@ -209,9 +209,9 @@ for the screen used up the internal RAM Wi-Fi needs; they now live in PSRAM, and
 keeps the screen's own settings too. Tested on both kits (V4 Expansion Kit and V4-R8 Expansion Kit V2).
 v0.2.2 added the environment sensors and got the web dashboard running.
 
-**Known issue**: the V4-R8's microSD slot isn't readable yet. The card is detected but data reads fail
-(Meshtastic's board settings for this kit; v0.2.3 already lowers its clock from 75 MHz to the 20 MHz cards
-are specified for). Nothing in Hoptics uses the card yet.
+**Known issue in v0.2.3**: the V4-R8's microSD slot isn't readable. The card is detected but data reads fail.
+**Fixed on main for the next release**: the card now runs at 4 MHz, Meshtastic's default for SD cards, and reads
+cleanly (tested with a 64 GB SDHC card, FAT32). Nothing in Hoptics uses the card yet.
 
 Feedback welcome: use **Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
