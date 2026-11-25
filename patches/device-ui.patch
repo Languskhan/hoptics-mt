@@ -1,3 +1,91 @@
+diff --git a/include/graphics/view/TFT/HopticsBoard.h b/include/graphics/view/TFT/HopticsBoard.h
+new file mode 100644
+index 0000000..2d1801f
+--- /dev/null
++++ b/include/graphics/view/TFT/HopticsBoard.h
+@@ -0,0 +1,40 @@
++#pragma once
++/**
++ * Hoptics MT - board facts the UI cannot find out at run time. GPL-3.0, same as device-ui.
++ * (Touch screen, keyboard and trackball are known at run time: see HopticsInput.h.)
++ */
++
++namespace hoptics
++{
++namespace board
++{
++
++// Short name for problem reports. One word: the report's details line is space-separated.
++#if defined(HELTEC_V4_R8)
++constexpr const char *kName = "V4-R8";
++#elif defined(HELTEC_V4)
++constexpr const char *kName = "V4";
++#elif defined(T_DECK_PLUS)
++constexpr const char *kName = "T-Deck-Plus";
++#elif defined(T_DECK)
++constexpr const char *kName = "T-Deck";
++#elif defined(ELECROW_ThinkNode_M9)
++constexpr const char *kName = "M9";
++#elif defined(ARDUINO_ARCH_ESP32)
++constexpr const char *kName = "ESP32";
++#else
++constexpr const char *kName = "host";
++#endif
++
++// The board takes plug-in environment sensors (the Heltec kits' expansion board slots). The T-Deck Plus
++// (its Grove port carries the GPS) and the ThinkNode M9 have no sensor and no free connector: a sensor
++// there would have to be wired to the I2C bus by hand, so hints like "is the sensor board seated?" do not
++// apply and an empty Environment card can be left out.
++#if defined(T_DECK) || defined(ELECROW_ThinkNode_M9)
++constexpr bool kSensorSlots = false;
++#else
++constexpr bool kSensorSlots = true;
++#endif
++
++} // namespace board
++} // namespace hoptics
+diff --git a/include/graphics/view/TFT/HopticsInput.h b/include/graphics/view/TFT/HopticsInput.h
+new file mode 100644
+index 0000000..ec1d1d3
+--- /dev/null
++++ b/include/graphics/view/TFT/HopticsInput.h
+@@ -0,0 +1,36 @@
++#pragma once
++/**
++ * Hoptics MT - keyboard and trackball (LilyGO T-Deck Plus, Elecrow ThinkNode M9) on top of device-ui's
++ * input drivers. GPL-3.0, same as device-ui.
++ *
++ * device-ui creates the input devices in DeviceGUI::init(), before any Hoptics screen exists:
++ *  - I2C keyboards (T-Deck 0x55, ThinkNode M9 0x6C/0x6D, CardKB...) as an LV_INDEV_TYPE_KEYPAD
++ *  - the T-Deck trackball as an LV_INDEV_TYPE_ENCODER (roll up/down = enc_diff -1/+1, roll left/right =
++ *    LV_KEY_DOWN/LV_KEY_UP sent to the focused widget, click = LV_KEY_ENTER)
++ *  - on the T-Deck also a LV_INDEV_TYPE_BUTTON (trackball click) that LGFXDriver only enables while the
++ *    screen is dark
++ * Those drivers put the keypad and encoder on a group they create and make the default. This class keeps
++ * them on whatever group the UI makes the default later, and makes sure the key that wakes a dark screen
++ * only wakes it.
++ */
++#include "lvgl.h"
++
++class DisplayDriver;
++
++namespace hoptics
++{
++
++class Input
++{
++  public:
++    // once, after MeshtasticView::init() has created the input devices
++    static void begin(DisplayDriver *display);
++    // every UI loop: keypad and encoder follow lv_group_get_default() (cheap: a pointer compare per device)
++    static void service(void);
++    // a keyboard or trackball is attached, so the UI is also driven by focus, not only by touch
++    static bool hasKeys(void);
++    // a touch screen is attached (false on the ThinkNode M9: everything must be reachable by keys)
++    static bool hasTouch(void);
++};
++
++} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsMapRoots.h b/include/graphics/view/TFT/HopticsMapRoots.h
 new file mode 100644
 index 0000000..49fcdc5
@@ -1324,13 +1412,153 @@ index 5ddff3f..b4aa7e3 100644
 +
 +    std::unique_ptr<PacketType, Release> data;
  };
+diff --git a/source/graphics/TFT/HopticsInput.cpp b/source/graphics/TFT/HopticsInput.cpp
+new file mode 100644
+index 0000000..719d1c6
+--- /dev/null
++++ b/source/graphics/TFT/HopticsInput.cpp
+@@ -0,0 +1,133 @@
++/**
++ * HopticsInput - see HopticsInput.h. GPL-3.0.
++ */
++#include "graphics/view/TFT/HopticsInput.h"
++#include "graphics/driver/DisplayDriver.h"
++#include "input/DiacriticRotation.h"
++#include "util/ILog.h"
++
++// On the T-Deck the trackball click (GPIO0) is read twice: by the encoder and by the button device that
++// LGFXDriver switches on while the screen is dark. That button "presses" a fixed point on the screen, so a
++// click that only meant to wake the screen would also tap whatever Hoptics shows there. Where the button is
++// a pin of its own (the Heltec kits' USER button) it is left exactly as it was.
++#if defined(INPUTDRIVER_BUTTON_TYPE) && defined(INPUTDRIVER_ENCODER_BTN) && (INPUTDRIVER_BUTTON_TYPE == INPUTDRIVER_ENCODER_BTN)
++#define HOPTICS_GUARD_WAKE_BUTTON 1
++#endif
++
++namespace hoptics
++{
++
++namespace
++{
++struct Wrapped {
++    lv_indev_t *indev;
++    lv_indev_read_cb_t read; // the driver's own read callback
++};
++constexpr int kMaxWrapped = 4; // keyboard, trackball, wake button (+1 spare)
++Wrapped wrapped[kMaxWrapped];
++int wrappedCount = 0;
++DisplayDriver *display = nullptr;
++bool keys = false;
++
++lv_indev_read_cb_t driverRead(lv_indev_t *indev)
++{
++    for (int i = 0; i < wrappedCount; i++)
++        if (wrapped[i].indev == indev)
++            return wrapped[i].read;
++    return nullptr;
++}
++
++// Runs in place of the driver's read callback (on the UI task, inside lv_timer_handler).
++void guardedRead(lv_indev_t *indev, lv_indev_data_t *data)
++{
++    lv_indev_read_cb_t read = driverRead(indev);
++    if (read)
++        read(indev, data);
++    const lv_indev_type_t type = lv_indev_get_type(indev);
++    const bool rolled = type == LV_INDEV_TYPE_ENCODER && data->enc_diff != 0;
++
++    // Screen dark (LGFXDriver power save): the press still counts as activity, which is what wakes the
++    // screen, but LVGL ignores it and its release - otherwise the key that woke the screen would also
++    // type a letter, press the focused button or move the focus. A trackball roll just wakes it.
++    if (display && display->isPowersaving() && (data->state == LV_INDEV_STATE_PRESSED || rolled)) {
++        lv_indev_wait_release(indev);
++        if (rolled) {
++            data->enc_diff = 0;
++            lv_display_trigger_activity(lv_indev_get_display(indev));
++        }
++        return;
++    }
++
++    // The keyboards' accent key (T-Deck Shift+$, M9 dedicated key) arrives as a private key code that a
++    // text area would otherwise insert as a stray character: cycle the accent of the letter before the
++    // cursor instead (a -> ä -> à ...), and nothing anywhere else.
++    if (type != LV_INDEV_TYPE_BUTTON && data->state == LV_INDEV_STATE_PRESSED && data->key == LV_KEY_CUSTOM_DIACRITIC) {
++        lv_group_t *g = lv_indev_get_group(indev);
++        lv_obj_t *focused = g ? lv_group_get_focused(g) : nullptr;
++        if (focused && lv_obj_check_type(focused, &lv_textarea_class))
++            DiacriticRotation::rotatePreviousCharacter(focused);
++        lv_indev_wait_release(indev); // LVGL skips this press and its release
++    }
++}
++
++void wrap(lv_indev_t *indev)
++{
++    if (wrappedCount >= kMaxWrapped || lv_indev_get_read_cb(indev) == guardedRead)
++        return;
++    wrapped[wrappedCount++] = {indev, lv_indev_get_read_cb(indev)};
++    lv_indev_set_read_cb(indev, guardedRead);
++}
++} // namespace
++
++void Input::begin(DisplayDriver *disp)
++{
++    display = disp;
++    for (lv_indev_t *i = lv_indev_get_next(nullptr); i; i = lv_indev_get_next(i)) {
++        switch (lv_indev_get_type(i)) {
++        case LV_INDEV_TYPE_KEYPAD:
++        case LV_INDEV_TYPE_ENCODER:
++            keys = true;
++            wrap(i);
++            break;
++#ifdef HOPTICS_GUARD_WAKE_BUTTON
++        case LV_INDEV_TYPE_BUTTON:
++            wrap(i);
++            break;
++#endif
++        default:
++            break;
++        }
++    }
++    if (keys)
++        ILOG_INFO("Hoptics: keyboard/trackball input on (%d device(s) guarded)", wrappedCount);
++    service();
++}
++
++void Input::service(void)
++{
++    if (!keys)
++        return;
++    lv_group_t *g = lv_group_get_default();
++    if (!g)
++        return;
++    for (lv_indev_t *i = lv_indev_get_next(nullptr); i; i = lv_indev_get_next(i)) {
++        const lv_indev_type_t t = lv_indev_get_type(i);
++        if ((t == LV_INDEV_TYPE_KEYPAD || t == LV_INDEV_TYPE_ENCODER) && lv_indev_get_group(i) != g)
++            lv_indev_set_group(i, g);
++    }
++}
++
++bool Input::hasKeys(void)
++{
++    return keys;
++}
++
++bool Input::hasTouch(void)
++{
++    for (lv_indev_t *i = lv_indev_get_next(nullptr); i; i = lv_indev_get_next(i))
++        if (lv_indev_get_type(i) == LV_INDEV_TYPE_POINTER)
++            return true;
++    return false;
++}
++
++} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsReport.cpp b/source/graphics/TFT/HopticsReport.cpp
 new file mode 100644
-index 0000000..8f66cfd
+index 0000000..4e86df6
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsReport.cpp
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,392 @@
 +#include "graphics/view/TFT/HopticsReport.h"
++#include "graphics/view/TFT/HopticsBoard.h"
 +#include "graphics/view/TFT/HopticsUI.h" // HOPTICS_VERSION
 +#include <cstdio>
 +#include <cstdlib>
@@ -1415,15 +1643,7 @@ index 0000000..8f66cfd
 +
 +const char *Report::board(void)
 +{
-+#if defined(HELTEC_V4_R8)
-+    return "V4-R8";
-+#elif defined(HELTEC_V4)
-+    return "V4";
-+#elif defined(ARDUINO_ARCH_ESP32)
-+    return "ESP32";
-+#else
-+    return "host";
-+#endif
++    return hoptics::board::kName;
 +}
 +
 +uint32_t Report::uptimeSecs(void)
@@ -8565,14 +8785,15 @@ index 0000000..d18a80e
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..25dc128
+index 0000000..ebceee0
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,713 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsView.h"
++#include "graphics/view/TFT/HopticsInput.h"
 +#include "graphics/view/TFT/HopticsReport.h"
 +#include "graphics/common/LoRaPresets.h"
 +#include "graphics/common/Ringtones.h"
@@ -8621,6 +8842,7 @@ index 0000000..25dc128
 +    ILOG_INFO("Hoptics MT " HOPTICS_VERSION " init");
 +    hoptics::Report::get().begin(); // why did we restart? (reads the crash summary once)
 +    MeshtasticView::init(client);
++    hoptics::Input::begin(displaydriver); // keyboard / trackball, if the board has them (T-Deck, M9)
 +    wireCallbacks();
 +    ui.createBootScreen(firmware_version);
 +    bootStart = (uint32_t)time(nullptr);
@@ -8630,6 +8852,7 @@ index 0000000..25dc128
 +// ---------------------------------------------------------------- lifecycle
 +void HopticsView::task_handler(void)
 +{
++    hoptics::Input::service(); // keys go to the UI's current default group (before LVGL reads them)
 +    MeshtasticView::task_handler();
 +    time_t now = time(nullptr);
 +
@@ -8914,10 +9137,21 @@ index 0000000..25dc128
 +        if (!rtttl)
 +            return;
 +        // the buzzer is on by default on these kits; switch it back on if someone turned it off
-+        if (idx > 0 && haveExtNotif && (!extNotif.enabled || !extNotif.alert_message_buzzer || !extNotif.use_pwm)) {
++#ifdef USE_I2S_BUZZER
++        // T-Deck: tones play through the I2S speaker; there is no PWM buzzer pin
++        const bool soundOff = !extNotif.enabled || !extNotif.alert_message_buzzer || !extNotif.use_i2s_as_buzzer;
++#else
++        const bool soundOff = !extNotif.enabled || !extNotif.alert_message_buzzer || !extNotif.use_pwm;
++#endif
++        if (idx > 0 && haveExtNotif && soundOff) {
 +            extNotif.enabled = true;
 +            extNotif.alert_message_buzzer = true;
++#ifdef USE_I2S_BUZZER
++            extNotif.use_i2s_as_buzzer = true;
++            extNotif.use_pwm = false;
++#else
 +            extNotif.use_pwm = true;
++#endif
 +            controller->sendConfig(meshtastic_ModuleConfig_ExternalNotificationConfig{extNotif}, ownNode);
 +            ui.showToast(LV_SYMBOL_AUDIO " Message sound turned on - restarting", 5000);
 +            armRebootFallback();

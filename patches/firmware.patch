@@ -1,17 +1,17 @@
 diff --git a/src/Power.cpp b/src/Power.cpp
-index 17961ad..7bff63e 100644
+index 17961ad..845ba97 100644
 --- a/src/Power.cpp
 +++ b/src/Power.cpp
 @@ -371,6 +371,78 @@ static void battery_adcDisable()
   * A simple battery level sensor that assumes the battery voltage is attached
   * via a voltage-divider to an analog input
   */
-+#if defined(HOPTICS_UI) && (defined(HELTEC_V4) || defined(HELTEC_V4_R8)) && !defined(EXT_PWR_DETECT) &&                       \
++#if defined(HOPTICS_UI) && (defined(HELTEC_V4) || defined(HELTEC_V4_R8) || defined(T_DECK)) && !defined(EXT_PWR_DETECT) &&    \
 +    !defined(USB_HOST_PWR_DETECT) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 +#define HOPTICS_SMART_VBUS 1
 +#include <algorithm>
 +#include "HWCDC.h"
-+// Hoptics MT: the V4 boards have no USB-sense pin, so stock firmware says "on USB" whenever the battery
++// Hoptics MT: the V4 boards and the T-Deck have no USB-sense pin, so stock firmware says "on USB" whenever the battery
 +// reads above full-charge voltage - which a freshly charged cell (or an ADC reading a little high) keeps
 +// doing long after the cable is pulled. Instead: a computer on the USB port is seen directly (start-of-frame
 +// packets), and its cable being pulled ends "external power" at once. Without a computer only a clear,
@@ -819,6 +819,37 @@ index 44d2400..c4311cb 100644
      /// NodeInfo cache capacity.
      static constexpr uint16_t nodeInfoTargetEntries() { return kNodeInfoCacheEntries; }
  
+diff --git a/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini b/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
+index fc8c3be..4d90f88 100644
+--- a/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
++++ b/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
+@@ -29,7 +29,10 @@ build_flags =
+   -D SDCARD_USE_SPI1
+   -D SDCARD_SHARE_SPI
+   -D SDCARD_INIT_SPI
+-  -D SD_SPI_FREQUENCY=75000000U
++  ; Hoptics MT: was 75 MHz (the display clock). The card shares this bus with the LR1110 and the LCD.
++  ; 4 MHz is Meshtastic's own SD default (FSCommon.cpp); on the Heltec V4-R8 kit data reads failed at 75
++  ; and at 20 MHz and only worked at 4. Raise after a hardware test.
++  -D SD_SPI_FREQUENCY=4000000U
+   -D HAS_SCREEN=1
+   -D SPI_FREQUENCY=75000000
+ ;  -D COMPASS_SENSOR_DEBUG=1
+@@ -97,6 +100,14 @@ lib_deps =
+ custom_sdkconfig =
+   ${esp32s3_base.custom_sdkconfig}
+   ${device-ui_base.custom_sdkconfig}
++  ; Hoptics MT: keep a crash summary (core dump) in the coredump partition so the
++  ; radio can show what crashed after it restarts (Meshtastic turns this off)
++  CONFIG_ESP_COREDUMP_ENABLE=y
++  CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
++  '# CONFIG_ESP_COREDUMP_ENABLE_TO_NONE is not set'
++  CONFIG_ESP32_ENABLE_COREDUMP=y
++  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
++  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+ 
+ extra_scripts =
+   ${esp32s3_base.extra_scripts}
 diff --git a/variants/esp32s3/heltec_v4/platformio.ini b/variants/esp32s3/heltec_v4/platformio.ini
 index 73a863d..3215a82 100644
 --- a/variants/esp32s3/heltec_v4/platformio.ini
@@ -876,3 +907,58 @@ index bf7f08a..828b8da 100644
  
  extra_scripts =
    ${heltec_v4_r8_base.extra_scripts}
+diff --git a/variants/esp32s3/t-deck/platformio.ini b/variants/esp32s3/t-deck/platformio.ini
+index 216ef82..0e0999a 100644
+--- a/variants/esp32s3/t-deck/platformio.ini
++++ b/variants/esp32s3/t-deck/platformio.ini
+@@ -97,3 +97,26 @@ lib_deps =
+ custom_sdkconfig =
+   ${esp32s3_base.custom_sdkconfig}
+   ${device-ui_base.custom_sdkconfig}
++
++; Hoptics MT build for the LilyGO T-Deck Plus (the T-Deck with GNSS and the larger battery): the settings of
++; t-deck-tft plus GPS on by default, so it should also run on an original T-Deck (that just finds no GPS).
++[env:t-deck-plus-tft]
++extends = env:t-deck-tft
++
++build_flags =
++  ${env:t-deck-tft.build_flags}
++  -D T_DECK_PLUS ; GPS on by default (variant.h)
++  ; was 75 MHz (variant.h, the display clock). 4 MHz is Meshtastic's own SD default (FSCommon.cpp); on the
++  ; Heltec V4-R8 kit data reads failed at 75 and at 20 MHz and only worked at 4. Raise after a hardware test.
++  -D SD_SPI_FREQUENCY=4000000U
++
++custom_sdkconfig =
++  ${env:t-deck-tft.custom_sdkconfig}
++  ; keep a crash summary (core dump) in the coredump partition so the
++  ; radio can show what crashed after it restarts (Meshtastic turns this off)
++  CONFIG_ESP_COREDUMP_ENABLE=y
++  CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
++  '# CONFIG_ESP_COREDUMP_ENABLE_TO_NONE is not set'
++  CONFIG_ESP32_ENABLE_COREDUMP=y
++  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
++  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+diff --git a/variants/esp32s3/t-deck/variant.h b/variants/esp32s3/t-deck/variant.h
+index 96ac191..1f4954c 100644
+--- a/variants/esp32s3/t-deck/variant.h
++++ b/variants/esp32s3/t-deck/variant.h
+@@ -38,7 +38,9 @@
+ #define BUTTON_ACTIVE_LOW true
+ #define BUTTON_ACTIVE_PULLUP true
+ 
++#ifndef T_DECK_PLUS // the T-Deck Plus has a GNSS module on these pins; the original T-Deck only a Grove port
+ #define GPS_DEFAULT_NOT_PRESENT 1
++#endif
+ #define GPS_RX_PIN 44
+ #define GPS_TX_PIN 43
+ 
+@@ -49,7 +51,9 @@
+ #define SPI_MISO (38)
+ #define SPI_CS (39)
+ #define SDCARD_CS SPI_CS
++#ifndef SD_SPI_FREQUENCY // a build can choose a lower clock (SD cards in SPI mode are specified to 25 MHz)
+ #define SD_SPI_FREQUENCY 75000000U
++#endif
+ 
+ #define BATTERY_PIN 4 // A battery voltage measurement pin, voltage divider connected here to measure battery voltage
+ // ratio of voltage divider = 2.0 (RD2=100k, RD3=100k)
