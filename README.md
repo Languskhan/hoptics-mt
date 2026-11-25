@@ -78,16 +78,17 @@ InfluxDB or a spreadsheet. See [Discord / logging](#discord--logging).
 
 ## Install (easiest)
 
-From the latest [release](https://github.com/Languskhan/hoptics-mt/releases), download
-**START-HERE-Hoptics-MT-install-guide.html** and the files for your kit (the guide's table says which).
-It walks through flashing from Chrome or Edge in about 10 minutes:
-- **Already on regular Meshtastic (2.6+)**: the Meshtastic Web Flasher can install the `.update.bin`
-  (folder icon next to Select Firmware, then **Update**). Your settings are kept.
-- **Anything else**: Espressif's ESP Tool page, `.factory.bin` at `0x0` plus `mt-esp32s3-ota.bin` at
-  `0x650000`.
+Open the **one-click installer** in Chrome or Edge on a computer:
+**https://languskhan.github.io/hoptics-mt/**
 
-The setup wizard takes over on the screen after that. The release also has a PDF user guide with
-screenshots of every screen.
+Plug the kit in, click the button for your kit, pick its port, and it flashes the latest release. First
+time on Hoptics: tick **Erase** (clean start, new keys). Updating: leave Erase unticked and everything is
+kept, including the screen's own settings. The setup wizard takes over on the screen after that.
+
+Other ways, from the latest [release](https://github.com/Languskhan/hoptics-mt/releases):
+**START-HERE-Hoptics-MT-install-guide.html** walks through it with the Meshtastic Web Flasher (`.update.bin`,
+if you're already on Meshtastic 2.6+) or Espressif's ESP Tool page (`.factory.bin` at `0x0` plus
+`mt-esp32s3-ota.bin` at `0x650000`). The release also has a PDF user guide with screenshots of every screen.
 
 ## Flashing by hand
 
@@ -131,10 +132,10 @@ Flashing back to stock Meshtastic works as usual (web flasher, "Heltec V4 TFT", 
 
 - **Tested** builds (every push and release) are built on the Meshtastic version listed in
   `.github/workflows/build.yml`, which these patches were written and checked against.
-- **Weekly upstream builds** (`upstream.yml`) put Hoptics on top of the **newest Meshtastic stable**
-  *and* **newest alpha/beta**, read from the same release list Meshtastic's flasher uses. They show up as
-  workflow artifacts named `...-stable` and `...-beta`. If a new upstream release breaks our patches,
-  that run fails instead of shipping something broken.
+- **Newer Meshtastic**: Hoptics is pinned to Meshtastic 2.8.3, which is newer than Meshtastic's current
+  stable (2.7.x) and alpha (2.8.2) releases. When a newer Meshtastic release comes out, Hoptics moves to it
+  after the patches are rebuilt and tested on both kits. (`build.yml` can also be run by hand from the
+  Actions tab with any Meshtastic tag, to try one early.)
 - **Over Wi-Fi**: the installer also writes Meshtastic's unified OTA loader (same file and slot as
   upstream), so ESP32 Wi-Fi/BLE OTA works. Push an `...update.bin` from the Meshtastic Android app's
   firmware update screen or the Meshtastic Python CLI's ESP32 Wi-Fi OTA (meshtastic/python PR #898).
@@ -202,12 +203,14 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
-v0.2.2: adds the environment sensors (Home card, 24-hour graphs, node readings, temperature correction,
-sharing) and gets the web dashboard actually running on these colour-screen builds (stock Meshtastic
-never starts its web server with the colour UI, so `/hoptics` was unreachable before). Tested on the
-V4-R8 Expansion Kit V2: both sensors (including the GXHTC3, which needed a wake-up fix) and the web page.
-The V4 Expansion Kit gets the same build. The ESP32 builds run in GitHub Actions. Feedback welcome: use
-**Report a problem** on the radio, or
+v0.2.3: fixes the V4-R8 getting no Wi-Fi address for about two minutes after every boot (startup packets
+for the screen used up the internal RAM Wi-Fi needs; they now live in PSRAM, and Wi-Fi is up in about
+12 seconds), fixes the V4-R8's SD card slot (it was clocked at 75 MHz, three times what SD cards allow, so
+every read failed), and adds the **one-click web installer**. Updating through the installer without
+erasing now keeps the screen's own settings too. Tested on both kits (V4 Expansion Kit and V4-R8 Expansion
+Kit V2). v0.2.2 added the environment sensors and got the web dashboard running.
+
+Feedback welcome: use **Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
 
 **Next (planned)**: Wi-Fi file manager for the V4-R8's SD card (logs, map tiles), and optional offline
