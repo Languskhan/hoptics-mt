@@ -113,8 +113,9 @@ def draw_tile(lat0, lon0, z, tx, ty):
             x, y = P(i * 1600 + 40, -700)
             d.text((x, y), f"{['Oak','Elm','Main','Hazel','Pine','Madison','Central','Greenback','Cedar'][abs(i)//2 % 9]} Ave",
                    font=f, fill=TEXT, stroke_width=2 * SS, stroke_fill=(255, 255, 255))
-    if z <= 14:
-        f = font((13 if z >= 12 else 11) * SS)
+    # town names only once they are far enough apart not to pile up on the nodes
+    if 12 <= z <= 14:
+        f = font(13 * SS)
         for name, (mx, my) in (("Riverbend", (0, 0)), ("Lakeside", (-2600, 1800)), ("Northgate", (3500, -4200))):
             x, y = P(mx, my)
             d.text((x, y), name, font=f, fill=(0, 0, 0), stroke_width=2 * SS, stroke_fill=(255, 255, 255))

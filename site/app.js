@@ -116,6 +116,43 @@ function setupFlasher(nodes, ver) {
   draw();
 }
 
+// ---------- theme switcher ----------
+const THEMES = {
+  midnight: ['Midnight', 'The default. Dark background with bright accents for indoor and evening use.'],
+  daylight: ['Daylight', 'Light background and strong contrast so the screen stays readable in full sun.'],
+  nightred: ['Night-red', 'Red on black only, to keep your night vision at night.'],
+  amber: ['Amber', 'Warm amber on black. Softer than Midnight for dim rooms and night driving.'],
+};
+function setupThemes() {
+  const tabs = [...document.querySelectorAll('.tab[data-theme]')];
+  if (!tabs.length) return;
+  const panel = $('#theme-panel');
+  const imgs = [...panel.querySelectorAll('img[data-screen]')];
+  const pick = (tab, focus) => {
+    const t = tab.dataset.theme, [name, use] = THEMES[t];
+    tabs.forEach(b => { const on = b === tab; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+    panel.setAttribute('aria-labelledby', tab.id);
+    $('#theme-name').textContent = name;
+    $('#theme-use').textContent = use;
+    imgs.forEach(img => {
+      img.src = 'img/themes/' + img.dataset.screen + '-' + t + '.png';
+      img.alt = img.closest('figure').querySelector('b').textContent + ' screen, ' + name + ' theme';
+    });
+    if (focus) tab.focus();
+  };
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => pick(tab));
+    tab.addEventListener('keydown', e => {
+      const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      if (d) { e.preventDefault(); pick(tabs[(i + d + tabs.length) % tabs.length], true); }
+    });
+  });
+  // warm the cache so switching themes is instant
+  window.addEventListener('load', () => Object.keys(THEMES).forEach(t =>
+    imgs.forEach(img => { new Image().src = 'img/themes/' + img.dataset.screen + '-' + t + '.png'; })));
+}
+setupThemes();
+
 data.then(({ nodes, updates, ver }) => {
   const v = $('#ver');
   if (v && ver) v.textContent = 'Latest release: ' + ver.tag;
