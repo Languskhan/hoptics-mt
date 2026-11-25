@@ -1,5 +1,7 @@
-// Host harness: renders HopticsUI into an in-memory 240x320 RGB565 display with fake mesh
-// data and writes one PPM screenshot per screen.
+// Host harness: renders HopticsUI into an in-memory RGB565 display with fake mesh data and writes
+// one PPM screenshot per screen.
+//   ./harness                       240x320 portrait (Heltec kits) into shots/
+//   ./harness 320x240 shots_320x240 landscape (T-Deck Plus, ThinkNode M9) into its own folder
 #define private public
 #include "graphics/view/TFT/HopticsUI.h"
 #undef private
@@ -12,8 +14,9 @@
 #include <string>
 #include <unistd.h>
 
-static const int WD = 240, HT = 320;
-static uint16_t fb[WD * HT];
+static int WD = 240, HT = 320;
+static std::string outDir = "shots";
+static uint16_t fb[320 * 320];
 static uint32_t fakeMs = 0;
 
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
@@ -56,7 +59,7 @@ static void shot(const char *name)
     settleMap();
     lv_obj_invalidate(lv_screen_active());
     lv_refr_now(NULL);
-    std::string path = std::string("shots/") + name + ".ppm";
+    std::string path = outDir + "/" + name + ".ppm";
     FILE *f = fopen(path.c_str(), "wb");
     fprintf(f, "P6\n%d %d\n255\n", WD, HT);
     for (int i = 0; i < WD * HT; i++) {
@@ -71,17 +74,28 @@ static void shot(const char *name)
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && sscanf(argv[1], "%dx%d", &WD, &HT) != 2) {
+        fprintf(stderr, "usage: %s [WxH] [out dir]\n", argv[0]);
+        return 2;
+    }
+    if (WD * HT > (int)(sizeof(fb) / sizeof(fb[0])))
+        return 2;
+    if (argc > 2)
+        outDir = argv[2];
     setenv("TZ", "PST8PDT", 1);
     lv_init();
     lv_tick_set_cb(tick_cb);
     lv_display_t *d = lv_display_create(WD, HT);
-    static uint16_t buf[WD * 40];
-    lv_display_set_buffers(d, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    static uint16_t buf[320 * 40]; // partial render buffer: 40 lines
+    lv_display_set_buffers(d, buf, NULL, WD * 40 * sizeof(uint16_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(d, flush_cb);
 
     // street map: stand-in tiles from make_test_tiles.py instead of the internet, saved tiles in a scratch dir
-    system("rm -rf /tmp/hm-harness");
-    hoptics::TileMap::hostSetup("/tmp/hm-harness", "/tmp/tilesrc");
+    // scratch files go under $HARNESS_TMP (default /tmp), so two checkouts can render at the same time
+    const char *tmp = getenv("HARNESS_TMP") ? getenv("HARNESS_TMP") : "/tmp";
+    const std::string cache = std::string(tmp) + "/hm-harness", tiles = std::string(tmp) + "/tilesrc";
+    system(("rm -rf '" + cache + "'").c_str());
+    hoptics::TileMap::hostSetup(cache.c_str(), tiles.c_str());
     HopticsUI ui;
     gui = &ui;
     uint32_t now = 1795999000; // late Nov 2026
@@ -365,7 +379,7 @@ int main(int argc, char **argv)
 
     std::string js;
     ui.buildSnapshotJson(js);
-    FILE *jf = fopen("shots/snapshot.json", "w");
+    FILE *jf = fopen((outDir + "/snapshot.json").c_str(), "w");
     fwrite(js.data(), 1, js.size(), jf);
     fclose(jf);
     printf("snapshot %zu bytes\n", js.size());
@@ -503,7 +517,7 @@ int main(int argc, char **argv)
         ui.closeSettings();
         std::string d = hoptics::Report::get().details("2.8.3.e42ae67", ui.reportStatus());
         std::string u = hoptics::Report::get().issueUrl(true, d);
-        FILE *uf = fopen("shots/report_url.txt", "w");
+        FILE *uf = fopen((outDir + "/report_url.txt").c_str(), "w");
         fprintf(uf, "%s\n", u.c_str());
         fclose(uf);
         printf("report url %zu chars\n", u.size());
