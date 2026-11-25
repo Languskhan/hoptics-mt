@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoptics flasher: install from your browser</title>
+<meta name="description" content="Flash Hoptics onto your node from Chrome or Edge in about a minute.">
+<meta name="theme-color" content="#0a0f14">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+<div class="wrap">
+<nav aria-label="Main">
+<a class="brand" href="./"><img src="img/logo.svg" width="32" height="32" alt="">HOPTICS</a>
+<div class="links">
+<a href="./#updates">Updates</a>
+<a href="./#firmware">Firmware</a>
+<a href="flash.html" aria-current="page">Flasher</a>
+<a href="https://github.com/Languskhan/hoptics-mt">GitHub</a>
+</div>
+</nav>
+</div>
+</header>
+
+<main id="main" class="wrap" style="padding-top:48px">
+<h1 style="font-size:clamp(32px,5vw,44px)">Flash Hoptics from your browser</h1>
+<p class="lead">Three steps, about a minute. Use Chrome or Edge on a computer and a USB-C cable that carries data.</p>
+
+<div class="card bad" style="margin-top:24px">
+<h2 style="font-size:18px">This browser can't flash firmware</h2>
+<p>Open this page in <b>Chrome</b> or <b>Edge</b> on a computer (Windows, Mac, Linux or ChromeOS). Firefox, Safari, phones and tablets can't talk to USB devices this way. You can still <a href="./#firmware">download the files</a>.</p>
+</div>
+
+<div class="flash">
+<div class="steps">
+<section class="card step">
+<h2><span class="n mono">1</span>Pick your node</h2>
+<div class="pick" id="pick"><p class="sub">Loading nodes…</p></div>
+<p class="note">Not sure which Heltec kit you have? Check the board: if it says V4-R8, pick the V4-R8 kit.</p>
+</section>
+
+<section class="card step">
+<h2><span class="n mono">2</span>New install or update?</h2>
+<div class="pick">
+<div class="opt" style="cursor:default"><b>First time on Hoptics</b><div class="body">When the installer asks, tick <b>Erase device</b>. You get a clean start and fresh encryption keys.</div></div>
+<div class="opt" style="cursor:default"><b>Updating Hoptics</b><div class="body">Leave Erase <b>unticked</b>. Your settings, nodes, messages and pairings are kept.</div></div>
+</div>
+</section>
+
+<section class="card step">
+<h2><span class="n mono">3</span>Connect and flash</h2>
+<div id="esp">
+<p class="sub">Plug the node in, click the button, and choose the port that appears (often "USB JTAG/serial debug unit").</p>
+<div class="go">
+<esp-web-install-button id="install" manifest="">
+<button slot="activate" class="btn big">Connect and install</button>
+<span slot="unsupported">Your browser can't flash devices. Use Chrome or Edge on a computer.</span>
+<span slot="not-allowed">This page must be opened over https.</span>
+</esp-web-install-button>
+<span class="summary mono" id="summary"></span>
+</div>
+</div>
+<div id="uf2" class="uf2" hidden>
+<p class="sub">This node is flashed by copying a file, no installer needed:</p>
+<ol>
+<li><a id="uf2-link" href="#">Download the firmware file</a>.</li>
+<li>Double-tap the node's reset button. A drive appears on your computer.</li>
+<li>Drag the file onto that drive. The node restarts on its own.</li>
+</ol>
+</div>
+</section>
+</div>
+
+<aside>
+<section class="card aside">
+<h2>Can't connect?</h2>
+<ol>
+<li>Try another USB-C cable. Some only charge.</li>
+<li>Hold <b>USER</b>, tap <b>RST</b>, let go of USER, then try again.</li>
+<li>Close other apps that use the port, like the Meshtastic web client.</li>
+</ol>
+</section>
+<section class="card aside warn">
+<h2>After flashing</h2>
+<p>The setup wizard asks for your region first. The radio stays silent until you pick one.</p>
+</section>
+<section class="card aside">
+<h2>Rather do it by hand?</h2>
+<p>Download the factory or update image from the <a href="./#firmware">firmware list</a> and flash it with esptool. The <a href="https://github.com/Languskhan/hoptics-mt#flashing-by-hand">README</a> has the commands.</p>
+</section>
+</aside>
+</div>
+</main>
+
+<footer class="site">
+<div class="wrap foot">
+<div class="fbrand">
+<a class="brand" href="./"><img src="img/logo.svg" width="28" height="28" alt="">HOPTICS</a>
+<p>A personal project by Bluffs. Not affiliated with Meshtastic or MeshCore. GPL-3.0.</p>
+</div>
+<div class="fl">
+<a href="./">Home</a>
+<a href="https://github.com/Languskhan/hoptics-mt">GitHub</a>
+<a href="https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml">Report a problem</a>
+<a href="https://buymeacoffee.com/Bluffs">Buy me a coffee</a>
+</div>
+</div>
+</footer>
+</body>
+</html>

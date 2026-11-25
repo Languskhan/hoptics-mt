@@ -228,3 +228,13 @@ as much.
 
 License: GPL-3.0 (same as Meshtastic firmware and device-ui). City data © GeoNames (https://www.geonames.org),
 CC BY 4.0.
+
+## The website
+
+The site in `site/` (home page, firmware list and browser flasher) is published to GitHub Pages by
+`.github/workflows/pages.yml`, with the latest release's firmware. To change it, edit and push to `main`:
+
+- `site/updates.json`: the "What's happening" cards. Newest first; `tag` is `released`, `progress` or `coming`.
+- `site/nodes.json`: one entry per node. Copy an entry to add a node; `status` is `available` or `soon`,
+  `platform` is `meshtastic` or `meshcore`, `flash` is `esp` (browser flasher) or `uf2` (download and drag).
+  An `available` node needs a matching factory image in the latest release.

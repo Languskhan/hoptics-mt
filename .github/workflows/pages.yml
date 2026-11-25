@@ -8,6 +8,10 @@ on:
     workflows: ["Build Hoptics MT firmware"]
     types: [completed]
   workflow_dispatch:
+  # Edits to the website itself (updates, node list, pages) republish it with the latest release's firmware.
+  push:
+    branches: [main]
+    paths: ["site/**"]
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ jobs:
   deploy:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     environment:
@@ -49,6 +54,7 @@ jobs:
           python tools/make_site.py dl site "$TAG"
           mkdir -p site/screenshots
           cp docs/screenshots/preview.png site/screenshots/ 2>/dev/null || true
+          python -c "import json; json.load(open('site/nodes.json')); json.load(open('site/updates.json'))"
           touch site/.nojekyll
           find site -type f | sort
 
