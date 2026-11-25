@@ -20,8 +20,16 @@ is upstream Meshtastic 2.8.3, unchanged.
 **names** and a **theme**. No phone app needed.
 
 **On the device (6 tabs)**
-- **Home**: nodes online, channel utilisation, your airtime, packets per minute, a 30-minute activity
-  graph, radio summary (region, preset, frequency, hop limit, power) and last-heard list.
+- **Home**: nodes online, channel utilisation, your airtime, packets per minute, the **Environment**
+  card (below), a 30-minute activity graph, radio summary (region, preset, frequency, hop limit, power)
+  and last-heard list.
+- **Environment sensors**: both kits come with a sensor board: a BME280 (temperature, humidity,
+  pressure) and, on some boards, a GXHTC3 (temperature, humidity). Home shows the reading in °F or °C, humidity,
+  pressure (inHg or hPa) with a rising/falling arrow, and a graph. Tap it for 24 hours of temperature,
+  humidity and pressure graphs, the dew point, the 3-hour pressure trend, and a list of **other nodes
+  that share readings** on the mesh. Readings stay on your radio (screen and web page) unless you turn on
+  **Share on mesh** in Settings > SENSORS (every 30 min to 12 h). Nodes that share readings show them on
+  their node page.
 - **Live**: every packet as it's heard, like a DMR hotspot last-heard list: who, packet type, direct
   or how many hops, RSSI/SNR. Filter All / RF only / **MQTT only** (MQTT rows have a violet edge).
 - **Map**: nodes that share GPS are plotted around you on an OpenStreetMap street map (themed to match:
@@ -34,12 +42,13 @@ is upstream Meshtastic 2.8.3, unchanged.
   direct packet flashes a beam to you. Tap a dot for that node.
 - **Chat**: channels and direct messages, bubbles with delivery ticks, on-screen keyboard, and pop-ups
   for new messages.
-- **Nodes**: sort by recent, signal, hops or name. Node detail shows signal, battery, channel use,
-  position, distance, an SNR history graph, and buttons for **DM**, **Trace route** and **Request position**.
+- **Nodes**: sort by recent, signal, hops or name. Node detail shows sensor readings (if the node shares
+  them), signal, battery, channel use, position, distance, an SNR history graph, and buttons for **DM**,
+  **Trace route** and **Request position**.
 - **Stats**: channel load and airtime over time, packets per minute, RSSI/SNR of recent packets,
   nodes by hop count, traffic mix, and **top talkers** (who is using the airtime).
 - **Settings** (gear icon): theme, brightness, screen timeout, message pop-ups and **message sound**
-  (each plays a sample), names, region, preset, role, Wi-Fi, Bluetooth (with a fresh random PIN shown
+  (each plays a sample), sensor units and sharing, names, region, preset, role, Wi-Fi, Bluetooth (with a fresh random PIN shown
   on screen), street map, web chat sharing, reboot and power off (two-tap confirm), and
   **Report a problem** (see below).
 - **City locator** (offline, like WADAMESH): a "Now in <town>" pop-up when you arrive somewhere new,
@@ -49,8 +58,15 @@ is upstream Meshtastic 2.8.3, unchanged.
   (red-only, keeps night vision) and Amber terminal.
 
 **On your network** (when the node is on Wi-Fi): open `http://<node-ip>/hoptics` for a live dashboard
-in the same style: tiles, live map with pings, traffic feed with the MQTT filter, charts, sortable
+in the same style: tiles, **environment readings and 24-hour sensor graphs** (with a °F/°C switch),
+sensors shared by other nodes, live map with pings, traffic feed with the MQTT filter, charts, sortable
 node table, and day/night toggle (`/hoptics?day` to bookmark day mode). It's read-only.
+
+| Home | Environment | Node with sensors | Settings > SENSORS |
+|---|---|---|---|
+| ![home](docs/screenshots/01_home.png) | ![env](docs/screenshots/51_env_detail.png) | ![node](docs/screenshots/52_node_env.png) | ![sensors](docs/screenshots/53_settings_sensors.png) |
+
+![web dashboard](docs/screenshots/web_dark.png)
 
 **Discord and loggers**: `tools/hoptics_bridge.py` runs on any PC or Pi on the same Wi-Fi. It posts new
 nodes and (optionally) channel chat to a Discord webhook, and/or writes JSON-lines logs for Grafana,
