@@ -5,6 +5,7 @@
 #undef private
 #include "graphics/view/TFT/HopticsReport.h"
 #include "lvgl.h"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -148,11 +149,47 @@ int main(int argc, char **argv)
     ui.buildMainScreen();
     lv_screen_load(ui.mainScreen);
 
+    // environment: telemetry settings, 5.5 h of 5-minute history, then live readings below
+    ui.setEnvConfig(false, 3600, false);
+    auto envAt = [](int minutesAgo) {
+        HopticsUI::EnvReading r;
+        float x = minutesAgo / 60.0f;
+        r.temp = 22.4f - 1.6f * sinf(x * 0.55f) - 0.04f * x * x;
+        r.hum = 46.0f + 5.0f * sinf(x * 0.4f + 1.0f);
+        r.press = 1013.1f + 0.62f * x;
+        return r;
+    };
+    for (int i = 66; i > 0; i--) {
+        HopticsUI::EnvReading r = envAt(60 + i * 5);
+        float v[3] = {r.temp, r.hum, r.press};
+        ui.envPush(v);
+    }
+    {
+        HopticsUI::EnvReading w;
+        w.temp = 11.6f;
+        w.hum = 71.0f;
+        w.press = 1012.4f;
+        ui.updateEnvironment(0x11aa2206, w);
+        ui.nodePtr(0x11aa2206)->envTime = now - 420;
+        HopticsUI::EnvReading g;
+        g.temp = 8.2f;
+        g.hum = 58.0f;
+        ui.updateEnvironment(0x11aa2201, g);
+        ui.nodePtr(0x11aa2201)->envTime = now - 1500;
+        HopticsUI::EnvReading o;
+        o.temp = 18.9f;
+        o.hum = 49.0f;
+        o.press = 1014.0f;
+        ui.updateEnvironment(0x11aa2204, o);
+        ui.nodePtr(0x11aa2204)->envTime = now - 2700;
+    }
+
     // simulate an hour of history, minute by minute
     uint32_t t = now - 3600;
     ui.lastMinute = t;
     srand(7);
     for (int m = 0; m < 60; m++) {
+        ui.updateEnvironment(me, envAt(60 - m));
         int pk = 3 + (rand() % 7) + (m > 40 ? 6 : 0);
         for (int p = 0; p < pk; p++) {
             const N &n = ns[rand() % 10];
@@ -272,6 +309,39 @@ int main(int argc, char **argv)
     lv_obj_scroll_to_y(lv_obj_get_child(ui.nodeOv, 1), 300, LV_ANIM_OFF);
     shot("08b_node_scrolled");
     ui.closeNode();
+
+    // environment: detail page, a node that shares readings, the Settings card, the waiting state
+    ui.openEnv();
+    pump(50);
+    shot("51_env_detail");
+    lv_obj_scroll_to_y(lv_obj_get_child(ui.envOv, 1), 260, LV_ANIM_OFF);
+    pump(20);
+    shot("51b_env_detail_pressure");
+    lv_obj_scroll_to_y(lv_obj_get_child(ui.envOv, 1), 2000, LV_ANIM_OFF);
+    pump(20);
+    shot("51c_env_detail_mesh");
+    ui.openNode(0x11aa2206);
+    pump(50);
+    shot("52_node_env");
+    ui.closeNode();
+    ui.closeEnv();
+    ui.openSettings();
+    pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setEnvEveryDd, LV_ANIM_OFF);
+    lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -60, LV_ANIM_OFF);
+    pump(20);
+    shot("53_settings_sensors");
+    ui.closeSettings();
+    {
+        HopticsUI::EnvReading saved = ui.envNow;
+        ui.envNow = HopticsUI::EnvReading();
+        ui.selectTab(HopticsUI::T_HOME);
+        pump(20);
+        shot("54_home_env_waiting");
+        ui.envNow = saved;
+        ui.envDirty = 0xff;
+        ui.selectTab(HopticsUI::T_HOME);
+    }
 
     ui.openSettings();
     pump(100);
