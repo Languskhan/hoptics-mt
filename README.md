@@ -241,15 +241,11 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
-v0.2.3: fixes the V4-R8 getting no Wi-Fi address for about two minutes after every boot (startup packets
-for the screen used up the internal RAM Wi-Fi needs; they now live in PSRAM, and Wi-Fi is up in about
-12 seconds), and adds the **one-click web installer**. Updating through the installer without erasing now
-keeps the screen's own settings too. Tested on both kits (V4 Expansion Kit and V4-R8 Expansion Kit V2).
-v0.2.2 added the environment sensors and got the web dashboard running.
-
-**Known issue in v0.2.3**: the V4-R8's microSD slot isn't readable. The card is detected but data reads fail.
-**Fixed on main for the next release**: the card now runs at 4 MHz, Meshtastic's default for SD cards, and reads
-cleanly (tested with a 64 GB SDHC card, FAT32). Nothing in Hoptics uses the card yet.
+v0.2.4: the **reach check** (how far your messages get, counted from MQTT gateways, by hops), **MQTT
+set-up on the radio** with a live checklist, and the **Reach logger** on the web dashboard. Fixes the
+V4-R8's microSD slot (it now reads, at 4 MHz), overlapping text on Home and Live, and the Amber theme's
+green. v0.2.3 fixed the V4-R8's slow Wi-Fi after boot and added the one-click web installer; v0.2.2 added
+the environment sensors and the web dashboard.
 
 Feedback welcome: use **Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
