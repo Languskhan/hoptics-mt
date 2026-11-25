@@ -38,7 +38,11 @@ td{padding:5px 4px;border-top:1px solid var(--line);white-space:nowrap;overflow:
 .msg b{font-size:12px}
 .wide{grid-column:1/-1}
 #status{font-size:12px}
-@media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}}
+.envgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px}
+.envgrid .cap{font-size:11px;color:var(--muted);margin-top:2px}
+.envgrid h3{font-size:10px;letter-spacing:1px;color:var(--muted);margin:0 0 4px;font-weight:600}
+.envnote{color:var(--muted);font-size:12px;margin-top:8px}
+@media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}.envgrid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -58,6 +62,20 @@ td{padding:5px 4px;border-top:1px solid var(--line);white-space:nowrap;overflow:
       <div class="tile" style="--c:var(--green)"><div class="k">PACKETS</div><div class="v" id="tPk">-</div><div class="s" id="tPkS"></div></div>
     </div>
   </section>
+  <section class="card wide" id="envCard"><h2 style="display:flex;align-items:center;gap:8px">ENVIRONMENT - this radio's sensors<span class="grow"></span><button id="envUnits" title="Switch units on this page">&deg;F / inHg</button></h2>
+    <div class="tiles">
+      <div class="tile" style="--c:var(--amber)"><div class="k">TEMPERATURE</div><div class="v" id="eT">-</div><div class="s" id="eTS"></div></div>
+      <div class="tile" style="--c:var(--blue)"><div class="k">HUMIDITY</div><div class="v" id="eH">-</div><div class="s" id="eHS"></div></div>
+      <div class="tile" style="--c:var(--violet)"><div class="k">PRESSURE</div><div class="v" id="eP">-</div><div class="s" id="ePS"></div></div>
+      <div class="tile" style="--c:var(--cyan)"><div class="k">UPDATED</div><div class="v" id="eU">-</div><div class="s" id="eUS"></div></div>
+    </div>
+    <div class="envgrid">
+      <div><h3>TEMPERATURE</h3><canvas id="ecT" height="110"></canvas><div class="cap" id="ecTc"></div></div>
+      <div><h3>HUMIDITY</h3><canvas id="ecH" height="110"></canvas><div class="cap" id="ecHc"></div></div>
+      <div><h3>PRESSURE</h3><canvas id="ecP" height="110"></canvas><div class="cap" id="ecPc"></div></div>
+    </div>
+    <div class="envnote" id="envNote"></div>
+  </section>
   <section class="card"><h2>LIVE MAP - pings show who is talking</h2><canvas id="map" height="360"></canvas><div class="sub" id="mapInfo"></div></section>
   <section class="card"><h2>LIVE TRAFFIC</h2>
     <div style="margin-bottom:6px"><button data-f="all" class="on">All</button> <button data-f="rf">RF</button> <button data-f="mqtt">MQTT</button></div>
@@ -69,6 +87,9 @@ td{padding:5px 4px;border-top:1px solid var(--line);white-space:nowrap;overflow:
   <section class="card wide"><h2>NODES - click a column to sort</h2><div class="scroll"><table>
     <thead><tr><th data-k="short">NODE</th><th data-k="long">NAME</th><th data-k="role">ROLE</th><th data-k="hops">HOPS</th><th data-k="snr">SNR</th><th data-k="batt">BATT</th><th data-k="pk">PKTS</th><th data-k="last">HEARD</th></tr></thead>
     <tbody id="nodes"></tbody></table></div></section>
+  <section class="card wide" id="envMeshCard"><h2>SENSORS ON THE MESH - readings other nodes share</h2><div class="scroll"><table>
+    <thead><tr><th>NODE</th><th>NAME</th><th>TEMP</th><th>HUMIDITY</th><th>PRESSURE</th><th>UPDATED</th></tr></thead>
+    <tbody id="envMesh"></tbody></table></div></section>
   <section class="card wide" id="chatCard" hidden><h2>CHANNEL CHAT (shared by the node owner; direct messages are never shown)</h2><div id="chat" class="scroll"></div></section>
 </main>
 <script>
@@ -106,7 +127,54 @@ function line(c, series, lo, hi, bars){
     g.beginPath(); let pen=false; arr.forEach((v,i)=>{ if(v===null){pen=false;return;} const x=i*w/(n-1), y=h-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo)*h; if(pen) g.lineTo(x,y); else {g.moveTo(x,y); pen=true;} }); g.stroke(); });
 }
 
-function render(){ if(!data) return; renderTiles(); renderLive(); renderNodes(); renderCharts(); renderChat(); drawMap(); }
+function render(){ if(!data) return; renderTiles(); renderEnv(); renderLive(); renderNodes(); renderCharts(); renderChat(); drawMap(); }
+
+// environment: units follow the radio's screen unless switched on this page (remembered in this browser)
+let envUnits=null; try{ envUnits=localStorage.getItem("hopticsUnits"); }catch(e){}
+$("envUnits").onclick=()=>{ const e=data&&data.env; const f=unitF(e); envUnits=f?"metric":"us"; try{localStorage.setItem("hopticsUnits",envUnits);}catch(x){} renderEnv(); };
+function unitF(e){ return envUnits? envUnits==="us" : !!(e&&e.f); }
+function unitInHg(e){ return envUnits? envUnits==="us" : !!(e&&e.inhg); }
+function fmtT(c,e,unit){ if(c===null||c===undefined) return "-"; const f=unitF(e); return (f?c*9/5+32:c).toFixed(1)+(unit===false?"":(f?"\u00b0F":"\u00b0C")); }
+function fmtP(h,e,unit){ if(h===null||h===undefined) return "-"; return unitInHg(e)? (h*0.02953).toFixed(2)+(unit===false?"":" inHg") : h.toFixed(unit===false?0:1)+(unit===false?"":" hPa"); }
+function dewC(t,rh){ if(t===null||rh===null||t===undefined||rh===undefined||rh<=0) return null; const a=17.62,b=243.12,g=Math.log(rh/100)+a*t/(b+t); return b*g/(a-g); }
+function presTrend(hist){ // hPa change over the last ~3 h, scaled to 3 h
+  if(!hist||hist.length<12) return null; let last=hist.length-1; while(last>0&&hist[last]===null) last--; let lo=Math.max(0,last-36); while(lo<last&&hist[lo]===null) lo++;
+  if(last-lo<12) return null; const d=(hist[last]-hist[lo])/10*36/(last-lo);
+  return d>=3?"rising fast":d>=1?"rising":d<=-3?"falling fast":d<=-1?"falling":"steady"; }
+function envChart(c, cap, hist, conv, col, digits, minSpan, suffix, step){
+  const vals=(hist||[]).map(v=>v===null?null:conv(v/10)); const ok=vals.filter(v=>v!==null);
+  if(!ok.length){ line(c,[],0,1); cap.textContent="No readings yet"; return; }
+  let lo=Math.min(...ok), hi=Math.max(...ok); const span=Math.max(hi-lo,minSpan), mid=(hi+lo)/2;
+  line(c,[[vals,col]], mid-span*0.6, mid+span*0.6);
+  const hrs=Math.max(1,Math.round(vals.length*step/3600));
+  cap.textContent="low "+lo.toFixed(digits)+suffix+"   high "+hi.toFixed(digits)+suffix+"   -   last "+(vals.length*step<3600? Math.round(vals.length*step/60)+" min" : hrs+" h");
+}
+function renderEnv(){
+  const e=data.env; $("envUnits").textContent=(unitF(e)?"\u00b0F / inHg":"\u00b0C / hPa");
+  if(!e){ $("envNote").textContent="This firmware does not report sensors."; return; }
+  const n=e.now, f=unitF(e);
+  $("eT").textContent= n&&n.t!==null? fmtT(n.t,e) : "-";
+  $("eH").textContent= n&&n.h!==null? Math.round(n.h)+"%" : "-";
+  $("eP").textContent= n&&n.p!==null? fmtP(n.p,e,false) : "-";
+  $("eU").textContent= n? ago(n.at) : "-";
+  const tv=(e.tHist||[]).filter(v=>v!==null); 
+  $("eTS").textContent= tv.length? "low "+fmtT(Math.min(...tv)/10,e)+" / high "+fmtT(Math.max(...tv)/10,e) : "";
+  const dp=n?dewC(n.t,n.h):null; $("eHS").textContent= dp!==null? "dew point "+fmtT(dp,e) : "";
+  const tr=presTrend(e.pHist); $("ePS").textContent=(unitInHg(e)?"inHg":"hPa")+(tr?"  -  "+tr:"");
+  $("eUS").textContent= e.share===null? "" : e.share? "shared on the mesh every "+(e.every%3600===0? (e.every/3600)+" h" : Math.round(e.every/60)+" min") : "not shared on the mesh";
+  const step=e.step||300;
+  envChart($("ecT"),$("ecTc"),e.tHist,v=>f?v*9/5+32:v,"--amber",1,f?4:2,"\u00b0",step);
+  envChart($("ecH"),$("ecHc"),e.hHist,v=>v,"--blue",0,10,"%",step);
+  const ih=unitInHg(e); envChart($("ecP"),$("ecPc"),e.pHist,v=>ih?v*0.02953:v,"--violet",ih?2:1,ih?0.06:2,ih?" inHg":" hPa",step);
+  $("envNote").textContent= n? (n.lux!==null&&n.lux!==undefined? "Light "+Math.round(n.lux)+" lux.  ":"")+(n.iaq!==null&&n.iaq!==undefined? "Air quality (IAQ) "+n.iaq+".  ":"")+"Graphs are 5-minute averages since the radio started (up to 24 h)."
+    : "No sensor readings yet - the sensors are read about once a minute. If this stays empty, check that the sensor board is seated.";
+  const tb=$("envMesh"); tb.replaceChildren();
+  const list=data.nodes.filter(x=>!x.me&&x.env).sort((a,b)=>b.env.at-a.env.at);
+  if(!list.length){ const tr=el("tr"); const td=el("td","No other node has shared readings yet."); td.colSpan=6; td.style.color=css("--muted"); tr.append(td); tb.append(tr); }
+  list.forEach(x=>{ const tr=el("tr"); const td=el("td"); td.append(badge(x.id));
+    tr.append(td, el("td",x.long||x.id), el("td",fmtT(x.env.t,e)), el("td",x.env.h===null?"-":Math.round(x.env.h)+"%"), el("td",fmtP(x.env.p,e)), el("td",ago(x.env.at)));
+    tb.append(tr); });
+}
 function renderTiles(){
   const s=data.stats, r=data.radio, others=data.nodes.filter(n=>!n.me);
   const online=others.filter(n=>n.last&&data.now-n.last<=7200).length;
