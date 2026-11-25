@@ -180,5 +180,12 @@ jobs:
           for e in ../../elf/*.elf; do [ -f "$e" ] && gh release upload "${{ github.event.release.tag_name }}" "$e" --clobber -R "${{ github.repository }}"; done
           mv SHA256SUMS.txt SHA256SUMS-${{ matrix.board }}.txt
           gh release upload "${{ github.event.release.tag_name }}" SHA256SUMS-${{ matrix.board }}.txt --clobber -R "${{ github.repository }}"
+          # the user guide and the install guide live in docs/release (only the newest guide PDF is attached)
+          if [ "${{ strategy.job-index }}" = "0" ]; then
+            cd "$GITHUB_WORKSPACE/docs/release"
+            [ -f START-HERE-Hoptics-MT-install-guide.html ] && gh release upload "${{ github.event.release.tag_name }}" START-HERE-Hoptics-MT-install-guide.html --clobber -R "${{ github.repository }}"
+            g=$(ls Hoptics-MT-User-Guide-*.pdf 2>/dev/null | sort -V | tail -1)
+            [ -n "$g" ] && gh release upload "${{ github.event.release.tag_name }}" "$g" --clobber -R "${{ github.repository }}"
+          fi
 
 # The one-click web installer is published by pages.yml after a release build finishes.

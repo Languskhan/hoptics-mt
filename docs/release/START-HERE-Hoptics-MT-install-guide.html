@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hoptics MT 0.2.4 – install &amp; test guide</title>
+<style>
+  :root{
+    --ink:#14232b; --muted:#56656c; --line:#d8e0e2; --bg:#f6f8f7; --card:#ffffff;
+    --accent:#0d7a6f; --accent-soft:#e3f3f0; --warn:#9a5b00; --warn-soft:#fff4e0; --code:#eef2f2;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e6eeee; --muted:#9fb0b3; --line:#2b3a3f; --bg:#0f181b; --card:#152226;
+      --accent:#3fc1b0; --accent-soft:#16332f; --warn:#f0b35a; --warn-soft:#33270f; --code:#1d2d31; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  main{max-width:780px;margin:0 auto;padding:28px 18px 60px}
+  header{border-bottom:2px solid var(--accent);padding-bottom:14px;margin-bottom:22px}
+  .kicker{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:28px;line-height:1.2;margin:6px 0 8px}
+  header p{margin:0;color:var(--muted)}
+  h2{font-size:20px;margin:34px 0 10px;display:flex;align-items:center;gap:10px}
+  h2 .n{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;
+    background:var(--accent);color:#fff;font-size:15px;flex:none}
+  h3{font-size:17px;margin:22px 0 8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:12px 0}
+  .note{background:var(--warn-soft);border-left:4px solid var(--warn);border-radius:6px;padding:10px 14px;margin:12px 0}
+  .tip{background:var(--accent-soft);border-left:4px solid var(--accent);border-radius:6px;padding:10px 14px;margin:12px 0}
+  .pick{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:620px){ .pick{grid-template-columns:1fr} }
+  .pick .card{margin:0}
+  .pick b.tag{display:inline-block;background:var(--accent);color:#fff;border-radius:5px;padding:1px 8px;font-size:13px;margin-bottom:6px}
+  ol.steps{padding-left:22px;margin:6px 0}
+  ol.steps > li{margin:9px 0;padding-left:4px}
+  ul{padding-left:22px}
+  code,.chip{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:14px;
+    background:var(--code);border-radius:5px;padding:1px 6px;white-space:nowrap}
+  .chip{cursor:pointer;border:1px solid var(--line)}
+  .chip:hover{border-color:var(--accent)}
+  .chip.copied::after{content:" copied";color:var(--accent);font-family:inherit;font-size:12px}
+  .ui{font-weight:600}
+  code.fn{word-break:normal;white-space:nowrap}
+  a{color:var(--accent)}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  td,th{border-bottom:1px solid var(--line);padding:7px 6px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  .check li{list-style:none;margin:10px 0 10px -22px}
+  .check label{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+  .check input{margin-top:5px;width:17px;height:17px;flex:none;accent-color:var(--accent)}
+  .small{font-size:13px;color:var(--muted)}
+  footer{margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+  footer code{font-size:11.5px;white-space:normal;word-break:break-all}
+  @media print{ .chip{border:none} body{background:#fff} .card{break-inside:avoid} }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div class="kicker">Hoptics MT · test build</div>
+  <h1>Install &amp; test guide</h1>
+  <p>Hoptics MT is a touch-screen version of Meshtastic. Thanks for trying it out! Installing takes a few minutes, all from a web browser.</p>
+</header>
+
+<div class="note"><b>Check first:</b>
+  <ul style="margin:6px 0 0">
+    <li>Hoptics MT runs on two kits with the color touch screen: the <b>Heltec V4 Expansion Kit</b> and the <b>Heltec V4-R8 Expansion Kit V2</b>. They need different files (below). On a bare board or one with the small OLED screen, the display won't work.</li>
+    <li>You need a <b>computer with Chrome or Edge</b>. Phones, Safari and Firefox can't flash firmware.</li>
+    <li>Use a <b>USB-C cable that carries data</b>. Some cables only charge.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Easiest: the one-click installer</h2>
+<ol class="steps">
+  <li>Plug the kit into the computer and open <span class="chip" data-copy="https://languskhan.github.io/hoptics-mt/">languskhan.github.io/hoptics-mt</span> in Chrome or Edge.</li>
+  <li>Click the button for <b>your</b> kit (<span class="ui">Install for V4 kit</span> or <span class="ui">Install for V4-R8 kit</span>) and pick the kit's port when Chrome asks. It's often listed as <i>USB JTAG/serial debug unit</i>.</li>
+  <li>Click <span class="ui">Install</span>. When it asks about erasing:
+    <ul>
+      <li><b>First time on Hoptics</b> (coming from regular Meshtastic, MeshCore or other firmware, or a new board): tick <b>Erase</b>. You'll set the region again in the setup wizard.</li>
+      <li><b>Updating Hoptics:</b> leave Erase unticked. Everything is kept, including the screen's own settings.</li>
+    </ul>
+  </li>
+  <li>Wait about a minute until it says it's done. The files come from the latest release, so there's nothing to download.</li>
+</ol>
+<div class="small">If that page doesn't work for you, use one of the two ways below instead. They do the same thing with files you download yourself.</div>
+
+<h3>Which files to download (other ways)</h3>
+<p>From the release page, download the files for <b>your</b> kit:</p>
+<table>
+  <tr><th>File</th><th>Used for</th></tr>
+  <tr><td colspan="2"><b>Heltec V4 Expansion Kit</b> (original V4)</td></tr>
+  <tr><td><code class="fn">hoptics-mt-heltec-v4-expansion-kit-…update.bin</code></td><td>Way A</td></tr>
+  <tr><td><code class="fn">hoptics-mt-heltec-v4-expansion-kit-…factory.bin</code></td><td>Way B, address <code>0x0</code></td></tr>
+  <tr><td colspan="2"><b>Heltec V4-R8 Expansion Kit V2</b></td></tr>
+  <tr><td><code class="fn">hoptics-mt-heltec-v4-r8-expansion-kit-v2-…update.bin</code></td><td>Way A</td></tr>
+  <tr><td><code class="fn">hoptics-mt-heltec-v4-r8-expansion-kit-v2-…factory.bin</code></td><td>Way B, address <code>0x0</code></td></tr>
+  <tr><td colspan="2"><b>Both kits</b></td></tr>
+  <tr><td><code class="fn">mt-esp32s3-ota.bin</code></td><td>Way B, address <code>0x650000</code></td></tr>
+</table>
+<p class="small">You don't need the <code>.elf</code> files; they're for decoding crash reports.</p>
+
+<h3>Other ways to install</h3>
+<div class="pick">
+  <div class="card">
+    <b class="tag">Way A</b>
+    <div><b>Your kit already runs regular Meshtastic</b> (version 2.6 or newer).</div>
+    <div class="small" style="margin-top:6px">Uses the Meshtastic Web Flasher. Your channels, name and settings are kept.</div>
+  </div>
+  <div class="card">
+    <b class="tag">Way B</b>
+    <div><b>Anything else:</b> it runs MeshCore or other firmware, it's brand new, you aren't sure of the version, or Way A didn't work.</div>
+    <div class="small" style="margin-top:6px">Uses Espressif's ESP Tool page. Works every time.</div>
+  </div>
+</div>
+
+<div class="tip"><b>If the browser can&#39;t connect to the kit</b> in either way, put it in boot mode: hold the <b>USER (PRG)</b> button, tap <b>RST</b>, then let go of USER. Then try connecting again. Once flashing finishes, tap <b>RST</b> to start it normally.</div>
+
+<h3>Way A: Meshtastic Web Flasher (keeps your settings)</h3>
+<ol class="steps">
+  <li>Plug the kit into the computer and open <span class="chip" data-copy="https://flasher.meshtastic.org">flasher.meshtastic.org</span> in Chrome or Edge.</li>
+  <li>Under <span class="ui">Select Target Device</span>, pick <b>Heltec V4</b> or <b>Heltec V4 R8</b>, or let it auto-detect.</li>
+  <li>Click the small <b>folder icon</b> next to <span class="ui">Select Firmware</span>. Choose the <code>.update.bin</code> for your kit.</li>
+  <li>Click <span class="ui">Flash</span>. Leave <span class="ui">Full Erase and Install</span> off; it may already be greyed out, which is fine. Click <span class="ui">Update</span>, then pick the kit's port when Chrome asks.</li>
+  <li>Wait for it to finish. If the screen doesn't restart on its own, tap <b>RST</b>.</li>
+</ol>
+<div class="small">Use the <code>.update.bin</code> file here, not the <code>.factory.bin</code>. The Meshtastic flasher can only do a full install with official release files.</div>
+
+<h3>Way B: ESP Tool page</h3>
+<ol class="steps">
+  <li>Plug in the kit and open <span class="chip" data-copy="https://espressif.github.io/esptool-js/">espressif.github.io/esptool-js</span> in Chrome or Edge.</li>
+  <li>Click <span class="ui">Connect</span> and pick the kit's port. It's often listed as <i>USB JTAG/serial debug unit</i> or a COM port. Wait for <i>"Connected to device: ESP32-S3"</i>.</li>
+  <li>In the <span class="ui">Program</span> section, change <span class="ui">Flash Address</span> to <span class="chip" data-copy="0x0">0x0</span>. Click <span class="ui">Choose File</span> and pick the <code>.factory.bin</code> for your kit.</li>
+  <li>Click <span class="ui">Add File</span>. In the new row, type <span class="chip" data-copy="0x650000">0x650000</span> and choose <code>mt-esp32s3-ota.bin</code>.</li>
+  <li>Set the <span class="ui">Erase all</span> box:
+    <ul>
+      <li><b>Coming from regular Meshtastic:</b> leave it <b>unchecked</b>. Your channels and settings are kept.</li>
+      <li><b>Coming from MeshCore or other firmware, or a new board:</b> <b>check it</b>. This wipes the radio clean first.</li>
+    </ul>
+  </li>
+  <li>Click <span class="ui">Program</span>. It takes about a minute. It's done when the log ends with <i>"Hash of data verified."</i></li>
+  <li>Click <span class="ui">Disconnect</span>, then tap <b>RST</b>, or unplug the kit and plug it back in.</li>
+</ol>
+<div class="small">If it fails partway through, set <span class="ui">Baudrate</span> to 115200 before clicking Connect and try again.</div>
+
+<h2><span class="n">2</span>Set it up</h2>
+<ul>
+  <li><b>If the radio was wiped or is new,</b> the screen walks you through 3 steps: <b>region</b> (pick <b>US</b>), <b>name</b>, and <b>look</b>. The radio stays silent until a region is set.</li>
+  <li><b>Wi-Fi</b> (needed for the street map): go to <span class="ui">Settings → WI-FI</span>, turn it on, and enter your network name and password. Only 2.4 GHz networks work.</li>
+</ul>
+<div class="note">On this radio, <b>Wi-Fi turns Bluetooth off</b>, so the Meshtastic phone app can't connect over Bluetooth while Wi-Fi is on. Turn Wi-Fi off again to get Bluetooth back.</div>
+
+<h2><span class="n">3</span>What to test</h2>
+<p class="small" style="margin-top:-4px">Tick these off as you go. They don't save, so jot down anything odd.</p>
+<ul class="check">
+  <li><label><input type="checkbox"><span><b>Screen &amp; touch:</b> it starts up on the Hoptics screen. Tapping, scrolling and switching tabs (Home, Nodes, Map) feel responsive.</span></label></li>
+  <li><label><input type="checkbox"><span><b>Messages:</b> send a message and receive one on a channel.</span></label></li>
+  <li><label><input type="checkbox"><span><b>Message sounds:</b> in <span class="ui">Settings → DISPLAY → Message sound</span>, try a few. Each should play a short sample. Then check that incoming messages use the sound you picked.</span></label></li>
+  <li><label><input type="checkbox"><span><b>Street map:</b> with Wi-Fi on and <span class="ui">Settings → MAP → Street map</span> turned on, open the Map tab. Streets should load around you or the nodes you can see. Drag to move and zoom in and out. Then turn Wi-Fi off: areas you already looked at should still show.</span></label></li>
+  <li><label><input type="checkbox"><span><b>Wi-Fi status:</b> a little while after Wi-Fi connects, <span class="ui">Settings → DEVICE</span> should show <i>IP: 192.168.x.x</i>, not stay stuck on "connecting...".</span></label></li>
+  <li><label><input type="checkbox"><span><b>Battery:</b> unplug USB. Within about a minute, it should show a battery percentage instead of "USB". Plug it back in and it should switch back.</span></label></li>
+  <li><label><input type="checkbox"><span><b>MQTT setup (new):</b> in <span class="ui">Settings → MQTT - REACH CHECK</span>, enter your MQTT server (or leave it blank for the public one), turn on both switches and tap <span class="ui">Save &amp; restart</span> twice. After it restarts, are all four checklist lines green?</span></label></li>
+  <li><label><input type="checkbox"><span><b>Reach check (new):</b> send a channel message. Within a few seconds the bubble should show something like <i>5 gw - 2 hops</i>. Tap <span class="ui">Reach</span> at the top of the chat: do the numbers look believable for your area?</span></label></li>
+  <li><label><input type="checkbox"><span><b>Web Reach logger (new):</b> on a computer on the same Wi-Fi, open <i>http://&lt;the radio's IP&gt;/hoptics</i>. The <b>Reach logger</b> card should list your messages; try <span class="ui">Export CSV</span>.</span></label></li>
+  <li><label><input type="checkbox"><span><b>Overnight:</b> leave it running. Did it ever restart on its own (the startup logo appears out of nowhere), freeze, or get slow?</span></label></li>
+  <li><label><input type="checkbox"><span><b>Report a problem:</b> <span class="ui">Settings → DEVICE → Report a problem</span> shows a QR code. Scan it with your phone: GitHub should open a bug report with your device details filled in. (No need to submit it just to test.)</span></label></li>
+  <li><label><input type="checkbox"><span><b>Anything else:</b> anything that's confusing, looks wrong, or is hard to read or tap.</span></label></li>
+</ul>
+
+<h2><span class="n">4</span>Report how it went</h2>
+<p>The easiest way: <span class="ui">Settings → DEVICE → Report a problem</span>, scan the QR code, and add what happened. If the radio ever crashes, a <b>Crash report</b> screen with its own QR code appears by itself after it restarts.</p>
+<p>Or send this to whoever shared the build with you, or open an issue at <span class="chip" data-copy="https://github.com/Languskhan/hoptics-mt/issues">github.com/Languskhan/hoptics-mt/issues</span>:</p>
+<ul>
+  <li>which way you installed it (A or B)</li>
+  <li>what worked and what didn't</li>
+  <li>for anything that went wrong: what you were doing, roughly what time, and a <b>photo of the screen</b></li>
+</ul>
+<p>If it keeps restarting over and over, unplug it and report it right away.</p>
+
+<h2><span class="n">5</span>Going back to regular Meshtastic</h2>
+<p>Any time: open <span class="chip" data-copy="https://flasher.meshtastic.org">flasher.meshtastic.org</span>, pick your kit and a release, click <span class="ui">Flash</span>, then choose <span class="ui">Full Erase and Install</span>. This wipes the radio, so you'll set the region again afterwards.</p>
+
+<footer class="small">
+  <div><b>Build:</b> Hoptics MT v0.2.4 on Meshtastic 2.8.3 · November 25, 2026</div>
+  <div style="margin-top:6px">Each file's SHA-256 checksum is listed in the <code>SHA256SUMS-…txt</code> files on the release page.</div>
+  <div style="margin-top:6px">Street map data © OpenStreetMap contributors (ODbL).</div>
+</footer>
+
+</main>
+<script>
+document.querySelectorAll('.chip').forEach(function(el){
+  el.title='Click to copy';
+  el.addEventListener('click',function(){
+    var t=el.getAttribute('data-copy')||el.textContent;
+    function done(){el.classList.add('copied');setTimeout(function(){el.classList.remove('copied')},1500);}
+    try{
+      if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done,fallback);}
+      else fallback();
+    }catch(e){fallback();}
+    function fallback(){
+      try{var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';
+        document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();}catch(e){}
+    }
+  });
+});
+</script>
+</body>
+</html>

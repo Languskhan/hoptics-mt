@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hoptics MT – New in 0.2.4</title>
+<style>
+@page { size: Letter; margin: 0; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, system-ui, sans-serif; color: #2b3542; font-size: 9.6pt; line-height: 1.55; }
+.page { width: 8.5in; height: 11in; padding: 0.62in 0.62in 0.5in; position: relative; page-break-after: always; overflow: hidden; }
+.eyebrow { font-size: 7.6pt; font-weight: 700; letter-spacing: 2.4px; color: #0e8fb0; margin: 0 0 4px; }
+h1 { font-size: 23pt; line-height: 1.1; margin: 0; color: #0b1118; font-weight: 700; letter-spacing: -0.3px; }
+.rule { width: 46px; height: 3px; border-radius: 2px; margin: 10px 0 14px; background: linear-gradient(90deg, #22d3ee, #8b5cf6); }
+p { margin: 0 0 8px; }
+b { color: #0b1118; }
+.row { display: flex; gap: 16px; align-items: flex-start; margin: 12px 0 14px; }
+.shots { display: flex; gap: 10px; flex: none; }
+figure { margin: 0; width: 1.28in; }
+figure img { width: 100%; display: block; border-radius: 9px; border: 4px solid #1b2531; background: #0a0f14; }
+figcaption { font-size: 7pt; color: #66717f; margin-top: 4px; line-height: 1.3; }
+.txt { flex: 1; min-width: 0; }
+.tag { display: inline-block; font-size: 6.8pt; font-weight: 700; letter-spacing: 1px; color: #fff; padding: 2px 7px; border-radius: 4px; margin-bottom: 4px; }
+h2 { font-size: 13pt; margin: 0 0 6px; color: #0b1118; }
+ul, ol { margin: 0 0 8px; padding-left: 16px; }
+li { margin: 0 0 4px; }
+.call { background: #e8f7fb; border: 1px solid #bfe7f2; border-radius: 8px; padding: 10px 13px; font-size: 9pt; margin-top: 6px; }
+.call.amber { background: #fff7e6; border-color: #f5d99a; }
+.web { width: 86%; border-radius: 8px; border: 1px solid #c9d2dc; display: block; margin: 4px 0 4px; }
+.foot { position: absolute; left: 0.62in; right: 0.62in; bottom: 0.34in; border-top: 1px solid #dfe4ea; padding-top: 6px;
+        display: flex; justify-content: space-between; font-size: 7pt; color: #66717f; }
+.foot b { color: #2b3542; }
+code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 8.4pt; background: #eef1f5; padding: 0 3px; border-radius: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 8.6pt; margin: 4px 0 8px; }
+th { text-align: left; font-size: 7pt; letter-spacing: 1px; color: #66717f; border-bottom: 1px solid #dfe4ea; padding: 4px 6px; }
+td { border-bottom: 1px solid #eef1f5; padding: 4px 6px; vertical-align: top; }
+</style>
+</head>
+<body>
+
+<section class="page">
+  <p class="eyebrow">NEW IN 0.2.4</p>
+  <h1>Reach check: how far did my message get?</h1>
+  <div class="rule"></div>
+  <p>When your radio is on Wi-Fi and receiving your MQTT server's traffic, every gateway that hears one of your
+  messages and uploads it to the server sends a copy back. Hoptics counts those copies, one per gateway, by how many
+  <b>hops</b> your message had travelled when that gateway heard it. Send a message, wait a few seconds, and you can
+  see how well it got into the mesh. (Set-up is on the next page.)</p>
+
+  <div class="row">
+    <div class="shots">
+      <figure><img src="guide-img/chat.png" alt=""><figcaption>Your message shows its reach; Reach is at the top</figcaption></figure>
+      <figure><img src="guide-img/reach.png" alt=""><figcaption>The Reach page</figcaption></figure>
+    </div>
+    <div class="txt">
+      <span class="tag" style="background:#0e8fb0">CHAT</span>
+      <h2>Right in the conversation</h2>
+      <ul>
+        <li>Under your own messages: <code>12 gw - 3 hops</code>, meaning 12 gateways uploaded it and the furthest was
+          3 hops out.</li>
+        <li>Tap <b>Reach</b> at the top of the chat for your latest message, or tap any of your bubbles.</li>
+        <li>On the <b>T-Deck Plus</b> and <b>ThinkNode M9</b>, move to Reach with the keys or trackball and press
+          Enter.</li>
+      </ul>
+      <span class="tag" style="background:#7c3aed">REACH</span>
+      <h2>The Reach page</h2>
+      <ul>
+        <li>The <b>number of gateways</b> that heard it, how far out the furthest was, and whether this radio
+          uploaded it too.</li>
+        <li>A bar for each hop count: <b>direct</b> (a gateway heard your radio itself), <b>1 hop</b> (one relay in
+          between), <b>2 hops</b>…</li>
+        <li>It updates live while copies are still coming in.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="shots">
+      <figure><img src="guide-img/gw.png" alt=""><figcaption>V4-R8, T-Deck Plus, M9: which gateways</figcaption></figure>
+      <figure><img src="guide-img/none.png" alt=""><figcaption>Nothing back yet: what to check</figcaption></figure>
+    </div>
+    <div class="txt">
+      <span class="tag" style="background:#059669">BY KIT</span>
+      <h2>Light on the V4, more on the bigger kits</h2>
+      <table>
+        <tr><th>KIT</th><th>REMEMBERS</th><th>SHOWS</th></tr>
+        <tr><td><b>V4 Expansion Kit</b></td><td>your last 6 messages</td><td>counts by hop</td></tr>
+        <tr><td><b>V4-R8 Kit V2</b>, <b>T-Deck Plus</b>, <b>ThinkNode M9</b></td><td>your last 24 messages</td><td>counts by hop and the names of the gateways</td></tr>
+      </table>
+      <p>Only messages typed on this screen are tracked, and checking costs one comparison per MQTT packet, so the
+      reach check itself adds almost nothing. What the radio remembers is cleared when it restarts. The web
+      page keeps a longer history (next page).</p>
+    </div>
+  </div>
+
+  <div class="call"><b>Only gateways that upload to your MQTT server are counted.</b> Radios that relay your message
+  without being MQTT gateways don't show up, so the real reach is usually bigger than the count. Compare messages with
+  each other, not with the size of the mesh.</div>
+
+  <div class="foot"><span><b>Hoptics MT</b> · User guide</span><span>16</span></div>
+</section>
+
+<section class="page">
+  <p class="eyebrow">NEW IN 0.2.4</p>
+  <h1>Setting up MQTT on the radio</h1>
+  <div class="rule"></div>
+  <p>Everything is in <b>Settings → MQTT - REACH CHECK</b>; no phone app needed. A checklist at the top turns green as
+  each part starts working.</p>
+
+  <div class="row">
+    <div class="shots">
+      <figure><img src="guide-img/set1.png" alt=""><figcaption>The checklist: one item still to do</figcaption></figure>
+      <figure><img src="guide-img/set2.png" alt=""><figcaption>Server, login and root topic</figcaption></figure>
+    </div>
+    <div class="txt">
+      <span class="tag" style="background:#0e8fb0">STEPS</span>
+      <h2>Five steps</h2>
+      <ol>
+        <li><b>Turn Wi-Fi on</b> (Settings → Wi-Fi). MQTT needs the internet.</li>
+        <li><b>Server, username, password and root topic</b>: ask your local mesh group. Regional servers carry your
+          area's traffic. Leave the server, username and password blank for the public Meshtastic server (root
+          <code>msh/US</code>).</li>
+        <li>Turn on <b>Others may upload my messages</b> (Meshtastic calls it <i>OK to MQTT</i>). Gateways on public
+          servers drop messages from radios that don't allow it.</li>
+        <li>Turn on <b>Receive MQTT on the primary channel</b> (the channel's <i>downlink</i>). That is how the copies
+          of your messages come back.</li>
+        <li><b>Save &amp; restart</b> (tap twice). Then send a channel message and watch it.</li>
+      </ol>
+      <p>Your radio doesn't need to upload (uplink) anything itself. Traffic that arrives over MQTT shows on the
+      screen (Live → MQTT only) but is <b>never sent out over LoRa</b>.</p>
+    </div>
+  </div>
+
+  <span class="tag" style="background:#7c3aed">WEB</span>
+  <h2>The Reach logger on the web dashboard</h2>
+  <p>Open <code>http://&lt;radio's address&gt;/hoptics</code> (the address is in Settings → DEVICE). The <b>Reach
+  logger</b> card shows the same checklist, totals, and a row per message with a small chart of gateways by hop.
+  Click a row for the details. Your browser keeps a longer history than the radio (up to 300 messages per radio),
+  and <b>Export CSV</b> saves it as a spreadsheet file.</p>
+  <img class="web" src="guide-img/web.png" alt="">
+  <p style="font-size:8pt;color:#66717f">Message text shows on the web page only for channel messages, and only when
+  Web chat is on (Settings). Direct messages and the MQTT login are never shown there.</p>
+
+  <div class="call amber"><b>Receiving MQTT is the heavy part, not the reach check.</b> Turning on "Receive MQTT"
+  brings in all of the channel's traffic from the server. On a busy regional server that's a lot for the V4; if it
+  struggles, turn it off when you're not checking reach.</div>
+
+  <div class="foot"><span><b>Hoptics MT</b> · User guide</span><span>17</span></div>
+</section>
+</body>
+</html>
