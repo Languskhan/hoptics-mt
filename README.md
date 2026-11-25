@@ -202,13 +202,23 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
-v0.2.1: running on both kits (V4 Expansion Kit and V4-R8 Expansion Kit V2). Street map, message sounds,
-Wi-Fi status and the V4's memory fix are tested on hardware; problem reports are new in this version.
-The ESP32 builds run in GitHub Actions. Feedback welcome: use **Report a problem** on the radio, or
+v0.2.2: adds the environment sensors (Home card, 24-hour graphs, node readings, temperature correction,
+sharing) and gets the web dashboard actually running on these colour-screen builds (stock Meshtastic
+never starts its web server with the colour UI, so `/hoptics` was unreachable before). Tested on the
+V4-R8 Expansion Kit V2: both sensors (including the GXHTC3, which needed a wake-up fix) and the web page.
+The V4 Expansion Kit gets the same build. The ESP32 builds run in GitHub Actions. Feedback welcome: use
+**Report a problem** on the radio, or
 [open an issue](https://github.com/Languskhan/hoptics-mt/issues/new?template=bug.yml).
 
 **Next (planned)**: Wi-Fi file manager for the V4-R8's SD card (logs, map tiles), and optional offline
 map tiles on the R8.
+
+## Support the project
+
+Hoptics MT is free. If it's useful to you, you can
+[buy me a coffee](https://buymeacoffee.com/Bluffs) (there's also a QR code at the bottom of Settings on
+the radio, and a link at the bottom of the web dashboard). Bug reports and testing on more kits help just
+as much.
 
 License: GPL-3.0 (same as Meshtastic firmware and device-ui). City data © GeoNames (https://www.geonames.org),
 CC BY 4.0.
