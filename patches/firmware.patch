@@ -91,6 +91,27 @@ index 17961ad..845ba97 100644
  #endif
          return getBattVoltage() > chargingVolt;
      }
+diff --git a/src/PowerFSM.cpp b/src/PowerFSM.cpp
+index 55ac032..8a2e87c 100644
+--- a/src/PowerFSM.cpp
++++ b/src/PowerFSM.cpp
+@@ -164,7 +164,15 @@ static void lsIdle()
+         // while a host is there, like the preflight veto below; a node on a battery or a charger
+         // still sleeps. A build can opt out with MESHTASTIC_LIGHT_SLEEP_IGNORE_USB_CONSOLE.
+         // If some other service would stall sleep, don't let sleep happen yet
+-        if ((MESHTASTIC_LIGHT_SLEEP_IGNORE_USB_CONSOLE || !usbConsoleHostAttached()) && doPreflightSleep()) {
++#ifdef HOPTICS_UI
++        // Hoptics MT: on USB or a charger the radio stays awake with its screen off, so the screen, keys and phone
++        // answer at once (stock firmware still sleeps on a charger, and on boards with a USB-serial chip it cannot
++        // see the console host above). On battery it sleeps as before.
++        const bool hopticsPowered = isPowered();
++#else
++        const bool hopticsPowered = false;
++#endif
++        if (!hopticsPowered && (MESHTASTIC_LIGHT_SLEEP_IGNORE_USB_CONSOLE || !usbConsoleHostAttached()) && doPreflightSleep()) {
+             // Briefly come out of sleep long enough to blink the led once every few seconds
+             uint32_t sleepTime = SLEEP_TIME;
+ 
 diff --git a/src/main.cpp b/src/main.cpp
 index 2b58bd1..a3e836a 100644
 --- a/src/main.cpp
