@@ -92,10 +92,119 @@ index 17961ad..7bff63e 100644
          return getBattVoltage() > chargingVolt;
      }
 diff --git a/src/main.cpp b/src/main.cpp
-index 2b58bd1..a3e836a 100644
+index 2b58bd1..26e7156 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -880,6 +880,11 @@ void setup()
+@@ -368,9 +368,108 @@ void printInfo()
+     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
+ }
+ #ifndef PIO_UNIT_TESTING
++#if defined(HOPTICS_HEAP_TRACE) && defined(ARCH_ESP32) && defined(CONFIG_HEAP_USE_HOOKS)
++// Hoptics MT diagnostic build only: the V4-R8 briefly runs out of internal RAM in its first minute
++// (and Wi-Fi then can't get an address). For the first 120 s, print every allocation of 2 KB or more
++// that lands in internal RAM (with a short backtrace), when it is freed again, and each new low of free
++// internal RAM. Decode the "bt" addresses with the build's .elf:
++//   xtensa-esp32s3-elf-addr2line -pfiaC -e firmware.elf 0x4200xxxx ...
++#include "esp_debug_helpers.h"
++#include "esp_heap_caps.h"
++#include "esp_memory_utils.h"
++#include "esp_rom_sys.h"
++#include "esp_timer.h"
++static void *volatile hhtPtr[64];
++static volatile uint32_t hhtSize[64];
++static volatile uint32_t hhtLines = 0;
++static volatile uint32_t hhtLowPrinted = UINT32_MAX;
++static esp_timer_handle_t hhtTimer = nullptr;
++
++static inline bool hhtActive(void)
++{
++    return esp_timer_get_time() < 120000000LL && hhtLines < 400;
++}
++
++extern "C" void IRAM_ATTR esp_heap_trace_alloc_hook(void *ptr, size_t size, uint32_t caps)
++{
++    if (size < 2048 || !ptr || !esp_ptr_internal(ptr) || !hhtActive())
++        return;
++    hhtLines++;
++    for (int i = 0; i < 64; i++) {
++        void *expected = nullptr;
++        if (__atomic_compare_exchange_n((void **)&hhtPtr[i], &expected, ptr, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
++            hhtSize[i] = size;
++            break;
++        }
++    }
++    esp_backtrace_frame_t f = {};
++    esp_backtrace_get_start(&f.pc, &f.sp, &f.next_pc);
++    uint32_t pcs[10];
++    int n = 0;
++    for (int d = 0; d < 10; d++) {
++        pcs[n++] = (f.pc & 0x80000000) ? ((f.pc & 0x3fffffff) | 0x40000000) - 3 : f.pc - 3;
++        if (!esp_backtrace_get_next_frame(&f) || f.pc == 0)
++            break;
++    }
++    esp_rom_printf("HHT +%u %p t=%u free=%u caps=%x bt:", (unsigned)size, ptr, (unsigned)(esp_timer_get_time() / 1000),
++                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)caps);
++    for (int i = 0; i < n; i++)
++        esp_rom_printf(" 0x%08x", (unsigned)pcs[i]);
++    esp_rom_printf("\n");
++}
++
++extern "C" void IRAM_ATTR esp_heap_trace_free_hook(void *ptr)
++{
++    if (!ptr)
++        return;
++    for (int i = 0; i < 64; i++) {
++        void *expected = ptr;
++        if (hhtPtr[i] == ptr &&
++            __atomic_compare_exchange_n((void **)&hhtPtr[i], &expected, nullptr, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
++            if (hhtActive())
++                esp_rom_printf("HHT -%u %p t=%u\n", (unsigned)hhtSize[i], ptr, (unsigned)(esp_timer_get_time() / 1000));
++            break;
++        }
++    }
++}
++
++static void hhtFailed(size_t size, uint32_t caps, const char *fn)
++{
++    esp_rom_printf("HHT FAIL %u caps=%x in %s t=%u free=%u\n", (unsigned)size, (unsigned)caps, fn ? fn : "?",
++                   (unsigned)(esp_timer_get_time() / 1000), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
++}
++
++static void hhtSample(void *)
++{
++    uint32_t low = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
++    if (low < 40000 && (hhtLowPrinted == UINT32_MAX || low + 2048 <= hhtLowPrinted)) {
++        hhtLowPrinted = low;
++        esp_rom_printf("HHT LOW %u t=%u now=%u largest=%u\n", (unsigned)low, (unsigned)(esp_timer_get_time() / 1000),
++                       (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++    }
++    if (esp_timer_get_time() > 120000000LL && hhtTimer)
++        esp_timer_stop(hhtTimer);
++}
++
++static void hopticsHeapTraceStart(void)
++{
++    heap_caps_register_failed_alloc_callback(hhtFailed);
++    const esp_timer_create_args_t a = {.callback = hhtSample, .arg = nullptr, .dispatch_method = ESP_TIMER_TASK, .name = "hht",
++                                       .skip_unhandled_events = true};
++    if (esp_timer_create(&a, &hhtTimer) == ESP_OK)
++        esp_timer_start_periodic(hhtTimer, 20000);
++    esp_rom_printf("HHT start: internal free %u, largest %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++}
++#endif
++
+ void setup()
+ {
+ 
++#if defined(HOPTICS_HEAP_TRACE) && defined(ARCH_ESP32) && defined(CONFIG_HEAP_USE_HOOKS)
++    hopticsHeapTraceStart();
++#endif
+     // initialize power HAL layer as early as possible
+     powerHAL_init();
+ 
+@@ -880,6 +979,11 @@ void setup()
      // Initialize transmit history to persist broadcast throttle timers across reboots
      TransmitHistory::getInstance()->loadFromDisk();
  #if HAS_TFT
@@ -845,10 +954,18 @@ index 73a863d..3215a82 100644
 +  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 +  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 diff --git a/variants/esp32s3/heltec_v4_r8/platformio.ini b/variants/esp32s3/heltec_v4_r8/platformio.ini
-index bf7f08a..6a07e95 100644
+index bf7f08a..e6157ab 100644
 --- a/variants/esp32s3/heltec_v4_r8/platformio.ini
 +++ b/variants/esp32s3/heltec_v4_r8/platformio.ini
-@@ -148,6 +148,14 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
+@@ -51,6 +51,7 @@ board_level = release
+ build_flags = 
+   ${heltec_v4_r8_base.build_flags} ;-Os
+   -D HELTEC_V4_R8_TFT
++  -D HOPTICS_HEAP_TRACE ; diagnostic build: start-up memory trace (not for releases)
+   -D I2C_SDA=17
+   -D I2C_SCL=18
+   -D PIN_BUTTON2=46
+@@ -148,6 +149,17 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
  custom_sdkconfig =
    ${esp32s3_base.custom_sdkconfig}
    ${device-ui_base.custom_sdkconfig}
@@ -860,6 +977,9 @@ index bf7f08a..6a07e95 100644
 +  CONFIG_ESP32_ENABLE_COREDUMP=y
 +  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 +  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
++  ; Hoptics MT: allocation hooks for the start-up memory diagnostic (only used when built with
++  ; -DHOPTICS_HEAP_TRACE; otherwise the hooks stay empty and cost nothing)
++  CONFIG_HEAP_USE_HOOKS=y
  
  extra_scripts =
    ${heltec_v4_r8_base.extra_scripts}
