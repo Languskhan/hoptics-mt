@@ -1,5 +1,5 @@
 {
-  "_help": "One entry per node. To add a node, copy an entry and change it. status: available | soon. platform: meshtastic | meshcore. flash: esp (browser flasher, ESP32 boards) | uf2 (nRF52 boards: download and drag onto the drive). The 'id' must match the firmware folder name the release builds (site/firmware/<id>/).",
+  "_help": "One entry per node. To add a node, copy an entry and change it. status: available | soon. platform: meshtastic | meshcore. flash: esp (browser flasher, ESP32 boards) | uf2 (nRF52 boards: download and drag onto the drive). beta: true shows a Beta label; set it to false once that node's firmware is stable. The 'id' must match the firmware folder name the release builds (site/firmware/<id>/).",
   "nodes": [
     {
       "id": "heltec-v4-expansion-kit",
@@ -8,6 +8,7 @@
       "firmware": "Hoptics MT",
       "platform": "meshtastic",
       "status": "available",
+      "beta": true,
       "flash": "esp"
     },
     {
@@ -17,6 +18,7 @@
       "firmware": "Hoptics MT",
       "platform": "meshtastic",
       "status": "available",
+      "beta": true,
       "flash": "esp"
     },
     {
@@ -26,6 +28,7 @@
       "firmware": "Hoptics",
       "platform": "meshcore",
       "status": "soon",
+      "beta": true,
       "flash": "esp"
     },
     {
@@ -35,6 +38,7 @@
       "firmware": "Hoptics",
       "platform": "meshcore",
       "status": "soon",
+      "beta": true,
       "flash": "esp"
     }
   ]

@@ -72,6 +72,7 @@ h2{margin:0;font-size:clamp(26px,3.4vw,34px);line-height:1.2}
 .pill.mc{background:#221a36;color:#c4b5fd}
 .pill.ok{background:#0f2a22;color:var(--mint)}
 .pill.soon{background:#2a2410;color:var(--amber)}
+.pill.beta{background:#2b1a0e;color:#fb923c;border:1px solid #7c3a12}
 .node{display:flex;flex-direction:column;gap:10px}
 .node h3{margin:4px 0 0;font-size:20px}
 .node .ver{font-size:13px;color:var(--soft)}
@@ -137,3 +138,11 @@ footer.site{border-top:1px solid var(--card2);margin-top:72px}
 .fbrand{max-width:520px}.fbrand .brand{font-size:16px}.fbrand p{margin:10px 0 0}
 .foot .fl{display:flex;flex-wrap:wrap;gap:12px 24px}
 @media (max-width:600px){.hero-in{padding-top:48px;padding-bottom:56px}.links{order:3;flex-basis:100%}.hero .shots{gap:12px;flex-basis:100%}.device{max-width:44%;padding:5px;border-radius:18px}.device img{border-radius:12px}.device.lower{margin-top:36px}}
+
+/* beta notice */
+.betabar{background:#1f150b;border-bottom:1px solid #7c3a12;color:#fed7aa;font-size:14px}
+.betabar .wrap{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 12px;padding:9px 24px;text-align:center}
+.betabar b{color:#fb923c;letter-spacing:1px}
+.betabar a{color:#fdba74;text-decoration:underline}
+.betatag{display:inline-block;margin-left:10px;padding:2px 9px;border-radius:999px;font-size:11px;letter-spacing:1px;color:#fb923c;border:1px solid #7c3a12;background:#2b1a0e;vertical-align:2px}
+.betanote{border-color:#7c3a12}.betanote h2{color:#fb923c}

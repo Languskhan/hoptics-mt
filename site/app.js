@@ -26,7 +26,7 @@ function versionLine(node, ver) {
   if (node.status !== 'available') return 'Not released yet';
   const r = release(ver, node.id);
   if (!r) return 'Not in this release';
-  return ver.tag + (r.meshtastic ? ' · Meshtastic ' + r.meshtastic : '');
+  return ver.tag + (node.beta ? ' beta' : '') + (r.meshtastic ? ' · Meshtastic ' + r.meshtastic : '');
 }
 
 // ---------- home page ----------
@@ -59,7 +59,7 @@ function renderNodes(nodes, ver, filter) {
     return make('article', { class: 'card node' },
       make('div', { class: 'top' },
         make('span', { class: 'pill ' + cls }, (n.firmware || 'Hoptics') + ' · ' + label),
-        make('span', { class: 'pill ' + (ready ? 'ok' : 'soon') }, ready ? 'Available' : 'Coming soon')),
+        make('span', { class: 'pill ' + (!ready ? 'soon' : n.beta ? 'beta' : 'ok') }, !ready ? 'Coming soon' : n.beta ? 'Beta' : 'Available')),
       make('h3', {}, n.name),
       make('p', {}, n.detail || ''),
       ready ? make('p', { class: 'ver mono' }, versionLine(n, ver)) : null,
@@ -95,7 +95,7 @@ function setupFlasher(nodes, ver) {
       return make('button', {
         type: 'button', class: 'opt', 'aria-pressed': String(n.id === current), disabled: !ok,
         onclick: () => { current = n.id; draw(); }
-      }, make('b', {}, n.name), make('span', {}, (n.firmware || 'Hoptics') + ' · ' + label + (ok ? '' : ' · coming soon')));
+      }, make('b', {}, n.name), make('span', {}, (n.firmware || 'Hoptics') + ' · ' + label + (ok ? (n.beta ? ' · beta' : '') : ' · coming soon')));
     }));
     const node = nodes.find(n => n.id === current);
     const esp = $('#esp'), uf2 = $('#uf2'), btn = $('#install');
