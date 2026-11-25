@@ -2,6 +2,7 @@
 """Generate the Hoptics MT boot-screen background art (original, procedural, reproducible).
 
 usage: make_boot_bg.py <design> <out.png> [--w 240 --h 320 --seed N]
+(--w 320 --h 240 for the landscape boards: assets/boot_bg_<design>_320x240.png)
 designs: ridgelines | constellation | aurora
 
 Everything is drawn from math (no source images), at 2x and downsampled for clean anti-aliasing.
@@ -212,8 +213,13 @@ def main():
     s = 2  # supersample
     W, H = a.w * s, a.h * s
     rng = np.random.default_rng(a.seed)
-    logo_cx, logo_cy = W / 2, H / 2 - 40 * s  # matches HopticsUI::createBootScreen
-    title_y = H / 2 + 62 * s
+    # logo and title where HopticsUI::createBootScreen puts them, so they sit on the calm part
+    if a.w > a.h:  # landscape panels (T-Deck Plus, ThinkNode M9): smaller logo near the top
+        logo_cx, logo_cy = W / 2, 66 * s
+        title_y = H / 2 + 6 * s
+    else:
+        logo_cx, logo_cy = W / 2, H / 2 - 40 * s
+        title_y = H / 2 + 62 * s
     img = {"ridgelines": ridgelines, "constellation": constellation, "aurora": aurora}[a.design](
         W, H, s, rng, logo_cx, logo_cy, title_y)
     out = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB").resize((a.w, a.h), Image.LANCZOS)
