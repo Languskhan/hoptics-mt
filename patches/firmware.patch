@@ -92,106 +92,377 @@ index 17961ad..7bff63e 100644
          return getBattVoltage() > chargingVolt;
      }
 diff --git a/src/main.cpp b/src/main.cpp
-index 2b58bd1..26e7156 100644
+index 2b58bd1..9699bf0 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -368,9 +368,108 @@ void printInfo()
+@@ -368,9 +368,379 @@ void printInfo()
      LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
  }
  #ifndef PIO_UNIT_TESTING
 +#if defined(HOPTICS_HEAP_TRACE) && defined(ARCH_ESP32) && defined(CONFIG_HEAP_USE_HOOKS)
 +// Hoptics MT diagnostic build only: the V4-R8 briefly runs out of internal RAM in its first minute
-+// (and Wi-Fi then can't get an address). For the first 120 s, print every allocation of 2 KB or more
-+// that lands in internal RAM (with a short backtrace), when it is freed again, and each new low of free
-+// internal RAM. Decode the "bt" addresses with the build's .elf:
++// (and Wi-Fi then can't get an address). For the first 120 s after setup() starts:
++//  - every internal-RAM allocation is counted per call site (8 return addresses after the allocator);
++//    whenever free internal RAM drops 6 KB or more within half a second, or reaches a new low, the
++//    busiest call sites of that half second are printed ("HHT W"),
++//  - allocations of 1 KB or more are also printed one by one ("HHT +"), and when freed ("HHT -"),
++//  - a status line every second ("HHT S"), new lows ("HHT LOW") with a block-size histogram of the
++//    internal heap, and failed allocations ("HHT FAIL").
++// The heap hooks never print: they run on whatever task allocates, including the 1 KB idle task, so they
++// only fill a ring buffer that a separate task prints. Decode "bt"/"pc" addresses with the build's .elf:
 +//   xtensa-esp32s3-elf-addr2line -pfiaC -e firmware.elf 0x4200xxxx ...
 +#include "esp_debug_helpers.h"
 +#include "esp_heap_caps.h"
 +#include "esp_memory_utils.h"
 +#include "esp_rom_sys.h"
 +#include "esp_timer.h"
-+static void *volatile hhtPtr[64];
-+static volatile uint32_t hhtSize[64];
-+static volatile uint32_t hhtLines = 0;
-+static volatile uint32_t hhtLowPrinted = UINT32_MAX;
-+static esp_timer_handle_t hhtTimer = nullptr;
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
 +
-+static inline bool hhtActive(void)
++#define HHT_SECS 120
++#define HHT_BIG 1024 // allocations this size or larger are also logged one by one
++#define HHT_RING 192
++#define HHT_TRACK 96
++#define HHT_SITES 160
++#define HHT_PCS 8  // return addresses kept per call site
++#define HHT_SKIP 3 // heap_caps_aligned_alloc_base, heap_caps_malloc_base, heap_caps_malloc
++
++struct HhtRec {
++    volatile uint8_t ready;
++    char kind;
++    char task[10];
++    uint32_t size, t, freeInt, caps;
++    const void *ptr;
++    uint32_t pcs[HHT_PCS];
++};
++struct HhtSite {
++    uint32_t pcs[HHT_PCS];
++    uint32_t count, bytes;       // this half second
++    uint32_t totCount, totBytes; // since the trace started
++};
++// The ring and the call-site table live in PSRAM so the trace itself takes almost no internal RAM.
++static HhtRec *hhtRing = nullptr;
++static HhtSite *hhtSites = nullptr;
++static void *volatile hhtPtr[HHT_TRACK];
++static volatile uint32_t hhtSize[HHT_TRACK];
++static volatile uint32_t hhtHead = 0, hhtTail = 0, hhtDropped = 0, hhtSiteMiss = 0;
++static volatile bool hhtOn = false;
++static portMUX_TYPE hhtMux = portMUX_INITIALIZER_UNLOCKED;
++
++static inline uint32_t IRAM_ATTR hhtMs(void)
 +{
-+    return esp_timer_get_time() < 120000000LL && hhtLines < 400;
++    return (uint32_t)(esp_timer_get_time() / 1000);
++}
++
++static void IRAM_ATTR hhtTaskName(char *out)
++{
++    TaskHandle_t h = xTaskGetCurrentTaskHandle();
++    const char *nm = h ? pcTaskGetName(h) : "-";
++    int i = 0;
++    while (nm && i < 9 && nm[i]) {
++        out[i] = nm[i];
++        i++;
++    }
++    out[i] = 0;
++}
++
++// Fills pcs[0..max) with return addresses, starting at the caller of the function this is inlined into.
++static inline __attribute__((always_inline)) int hhtBacktrace(uint32_t *pcs, int max)
++{
++    esp_backtrace_frame_t f = {};
++    esp_backtrace_get_start(&f.pc, &f.sp, &f.next_pc);
++    int n = 0;
++    while (n < max) {
++        pcs[n++] = (f.pc & 0x80000000) ? ((f.pc & 0x3fffffff) | 0x40000000) - 3 : f.pc - 3;
++        if (!esp_backtrace_get_next_frame(&f) || f.pc == 0)
++            break;
++    }
++    return n;
++}
++
++static HhtRec *IRAM_ATTR hhtReserve(void)
++{
++    HhtRec *r = nullptr;
++    portENTER_CRITICAL_SAFE(&hhtMux);
++    if (hhtHead - hhtTail < HHT_RING) {
++        r = &hhtRing[hhtHead % HHT_RING];
++        r->ready = 0;
++        hhtHead = hhtHead + 1;
++    } else {
++        hhtDropped = hhtDropped + 1;
++    }
++    portEXIT_CRITICAL_SAFE(&hhtMux);
++    return r;
 +}
 +
 +extern "C" void IRAM_ATTR esp_heap_trace_alloc_hook(void *ptr, size_t size, uint32_t caps)
 +{
-+    if (size < 2048 || !ptr || !esp_ptr_internal(ptr) || !hhtActive())
++    if (!hhtOn || !ptr || !esp_ptr_internal(ptr) || xPortInIsrContext())
 +        return;
-+    hhtLines++;
-+    for (int i = 0; i < 64; i++) {
++    uint32_t pcs[HHT_SKIP + HHT_PCS] = {};
++    hhtBacktrace(pcs, HHT_SKIP + HHT_PCS);
++    const uint32_t *key = pcs + HHT_SKIP;
++    uint32_t h = 2166136261u;
++    for (int i = 0; i < HHT_PCS; i++)
++        h = (h ^ key[i]) * 16777619u;
++
++    portENTER_CRITICAL_SAFE(&hhtMux);
++    bool placed = false;
++    for (int p = 0; p < 16 && !placed; p++) {
++        HhtSite &s = hhtSites[(h + p) % HHT_SITES];
++        if (s.totCount == 0) {
++            for (int i = 0; i < HHT_PCS; i++)
++                s.pcs[i] = key[i];
++        } else {
++            bool same = true;
++            for (int i = 0; i < HHT_PCS && same; i++)
++                same = s.pcs[i] == key[i];
++            if (!same)
++                continue;
++        }
++        s.count++;
++        s.bytes += size;
++        s.totCount++;
++        s.totBytes += size;
++        placed = true;
++    }
++    if (!placed)
++        hhtSiteMiss = hhtSiteMiss + 1;
++    portEXIT_CRITICAL_SAFE(&hhtMux);
++
++    if (size < HHT_BIG)
++        return;
++    for (int i = 0; i < HHT_TRACK; i++) {
 +        void *expected = nullptr;
 +        if (__atomic_compare_exchange_n((void **)&hhtPtr[i], &expected, ptr, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
 +            hhtSize[i] = size;
 +            break;
 +        }
 +    }
-+    esp_backtrace_frame_t f = {};
-+    esp_backtrace_get_start(&f.pc, &f.sp, &f.next_pc);
-+    uint32_t pcs[10];
-+    int n = 0;
-+    for (int d = 0; d < 10; d++) {
-+        pcs[n++] = (f.pc & 0x80000000) ? ((f.pc & 0x3fffffff) | 0x40000000) - 3 : f.pc - 3;
-+        if (!esp_backtrace_get_next_frame(&f) || f.pc == 0)
-+            break;
-+    }
-+    esp_rom_printf("HHT +%u %p t=%u free=%u caps=%x bt:", (unsigned)size, ptr, (unsigned)(esp_timer_get_time() / 1000),
-+                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)caps);
-+    for (int i = 0; i < n; i++)
-+        esp_rom_printf(" 0x%08x", (unsigned)pcs[i]);
-+    esp_rom_printf("\n");
++    HhtRec *r = hhtReserve();
++    if (!r)
++        return;
++    r->kind = '+';
++    r->size = size;
++    r->ptr = ptr;
++    r->caps = caps;
++    r->t = hhtMs();
++    r->freeInt = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
++    hhtTaskName(r->task);
++    for (int i = 0; i < HHT_PCS; i++)
++        r->pcs[i] = key[i];
++    __atomic_store_n(&r->ready, 1, __ATOMIC_RELEASE);
 +}
 +
++// Called for every free in the system, so it stays tiny: it also runs on the 1 KB idle task.
 +extern "C" void IRAM_ATTR esp_heap_trace_free_hook(void *ptr)
 +{
-+    if (!ptr)
++    if (!hhtOn || !ptr)
 +        return;
-+    for (int i = 0; i < 64; i++) {
++    for (int i = 0; i < HHT_TRACK; i++) {
++        if (hhtPtr[i] != ptr)
++            continue;
 +        void *expected = ptr;
-+        if (hhtPtr[i] == ptr &&
-+            __atomic_compare_exchange_n((void **)&hhtPtr[i], &expected, nullptr, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
-+            if (hhtActive())
-+                esp_rom_printf("HHT -%u %p t=%u\n", (unsigned)hhtSize[i], ptr, (unsigned)(esp_timer_get_time() / 1000));
-+            break;
++        if (__atomic_compare_exchange_n((void **)&hhtPtr[i], &expected, nullptr, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
++            HhtRec *r = hhtReserve();
++            if (r) {
++                r->kind = '-';
++                r->size = hhtSize[i];
++                r->ptr = ptr;
++                r->caps = 0;
++                r->t = hhtMs();
++                r->freeInt = 0;
++                hhtTaskName(r->task);
++                for (int k = 0; k < HHT_PCS; k++)
++                    r->pcs[k] = 0;
++                __atomic_store_n(&r->ready, 1, __ATOMIC_RELEASE);
++            }
 +        }
++        break;
 +    }
 +}
 +
 +static void hhtFailed(size_t size, uint32_t caps, const char *fn)
 +{
-+    esp_rom_printf("HHT FAIL %u caps=%x in %s t=%u free=%u\n", (unsigned)size, (unsigned)caps, fn ? fn : "?",
-+                   (unsigned)(esp_timer_get_time() / 1000), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
++    if (!hhtOn)
++        return;
++    HhtRec *r = hhtReserve();
++    if (!r)
++        return;
++    uint32_t pcs[HHT_SKIP + HHT_PCS] = {};
++    hhtBacktrace(pcs, HHT_SKIP + HHT_PCS);
++    r->kind = 'F';
++    r->size = size;
++    r->ptr = fn ? fn : "?";
++    r->caps = caps;
++    r->t = hhtMs();
++    r->freeInt = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
++    hhtTaskName(r->task);
++    for (int i = 0; i < HHT_PCS; i++)
++        r->pcs[i] = pcs[HHT_SKIP + i];
++    __atomic_store_n(&r->ready, 1, __ATOMIC_RELEASE);
 +}
 +
-+static void hhtSample(void *)
++static void hhtPrintPcs(const uint32_t *pcs)
 +{
-+    uint32_t low = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-+    if (low < 40000 && (hhtLowPrinted == UINT32_MAX || low + 2048 <= hhtLowPrinted)) {
-+        hhtLowPrinted = low;
-+        esp_rom_printf("HHT LOW %u t=%u now=%u largest=%u\n", (unsigned)low, (unsigned)(esp_timer_get_time() / 1000),
-+                       (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-+                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++    for (int i = 0; i < HHT_PCS; i++)
++        if (pcs[i])
++            esp_rom_printf(" 0x%08x", (unsigned)pcs[i]);
++    esp_rom_printf("\n");
++}
++
++static void hhtDrain(void)
++{
++    while (hhtTail != hhtHead) {
++        HhtRec *r = &hhtRing[hhtTail % HHT_RING];
++        if (!__atomic_load_n(&r->ready, __ATOMIC_ACQUIRE))
++            return; // still being filled in
++        if (r->kind == '+') {
++            esp_rom_printf("HHT + %u %p t=%u free=%u caps=%x task=%s bt:", (unsigned)r->size, r->ptr, (unsigned)r->t,
++                           (unsigned)r->freeInt, (unsigned)r->caps, r->task);
++            hhtPrintPcs(r->pcs);
++        } else if (r->kind == '-') {
++            esp_rom_printf("HHT - %u %p t=%u task=%s\n", (unsigned)r->size, r->ptr, (unsigned)r->t, r->task);
++        } else {
++            esp_rom_printf("HHT FAIL %u caps=%x in %s t=%u free=%u task=%s bt:", (unsigned)r->size, (unsigned)r->caps,
++                           (const char *)r->ptr, (unsigned)r->t, (unsigned)r->freeInt, r->task);
++            hhtPrintPcs(r->pcs);
++        }
++        portENTER_CRITICAL(&hhtMux);
++        r->ready = 0;
++        hhtTail = hhtTail + 1;
++        portEXIT_CRITICAL(&hhtMux);
 +    }
-+    if (esp_timer_get_time() > 120000000LL && hhtTimer)
-+        esp_timer_stop(hhtTimer);
++}
++
++// Prints the call sites that allocated the most internal RAM in the last half second (total=false, which
++// also starts a new half second) or since the trace started (total=true).
++static void hhtSiteDump(const char *tag, bool print, bool total, uint32_t now)
++{
++    struct Top {
++        uint32_t bytes, count;
++        uint32_t pcs[HHT_PCS];
++    } top[8] = {};
++    const int nTop = total ? 8 : 6;
++    portENTER_CRITICAL(&hhtMux);
++    for (int i = 0; i < HHT_SITES && print; i++) {
++        HhtSite &s = hhtSites[i];
++        uint32_t b = total ? s.totBytes : s.bytes;
++        if (!b)
++            continue;
++        for (int k = 0; k < nTop; k++) {
++            if (b <= top[k].bytes)
++                continue;
++            for (int m = nTop - 1; m > k; m--)
++                top[m] = top[m - 1];
++            top[k].bytes = b;
++            top[k].count = total ? s.totCount : s.count;
++            for (int j = 0; j < HHT_PCS; j++)
++                top[k].pcs[j] = s.pcs[j];
++            break;
++        }
++    }
++    if (!total)
++        for (int i = 0; i < HHT_SITES; i++)
++            hhtSites[i].count = hhtSites[i].bytes = 0;
++    portEXIT_CRITICAL(&hhtMux);
++    if (!print)
++        return;
++    for (int k = 0; k < nTop && top[k].bytes; k++) {
++        esp_rom_printf("HHT %s t=%u #%d bytes=%u n=%u pc:", tag, (unsigned)now, k, (unsigned)top[k].bytes, (unsigned)top[k].count);
++        hhtPrintPcs(top[k].pcs);
++    }
++}
++
++struct HhtHist {
++    uint32_t cnt[10], bytes[10], freeBlocks, freeBytes;
++};
++static bool hhtWalk(walker_heap_into_t, walker_block_info_t b, void *user)
++{
++    HhtHist *h = (HhtHist *)user;
++    if (!b.used) {
++        h->freeBlocks++;
++        h->freeBytes += b.size;
++        return true;
++    }
++    int k = 0;
++    for (size_t lim = 64; k < 9 && b.size >= lim; lim <<= 1)
++        k++;
++    h->cnt[k]++;
++    h->bytes[k] += b.size;
++    return true;
++}
++
++static void hhtPrinter(void *)
++{
++    uint32_t lowPrinted = UINT32_MAX, lastFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
++    uint32_t nextTick = hhtMs() + 500, nextStatus = 0, walks = 0;
++    bool lowInTick = false;
++    for (;;) {
++        hhtDrain();
++        uint32_t now = hhtMs();
++        uint32_t low = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
++        if (low < 40000 && (lowPrinted == UINT32_MAX || low + 2048 <= lowPrinted)) {
++            lowPrinted = low;
++            lowInTick = true;
++            esp_rom_printf("HHT LOW %u t=%u now=%u largest=%u\n", (unsigned)low, (unsigned)now,
++                           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++                           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++            if (low < 30000 && walks < 4) {
++                walks++;
++                HhtHist hist = {};
++                heap_caps_walk(MALLOC_CAP_INTERNAL, hhtWalk, &hist);
++                esp_rom_printf("HHT HIST t=%u freeBlocks=%u freeBytes=%u used(<64,<128,<256,<512,<1K,<2K,<4K,<8K,<16K,more):",
++                               (unsigned)now, (unsigned)hist.freeBlocks, (unsigned)hist.freeBytes);
++                for (int k = 0; k < 10; k++)
++                    esp_rom_printf(" %u/%u", (unsigned)hist.cnt[k], (unsigned)hist.bytes[k]);
++                esp_rom_printf("\n");
++            }
++        }
++        if ((int32_t)(now - nextTick) >= 0) {
++            uint32_t freeNow = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
++            bool drop = lastFree > freeNow && lastFree - freeNow >= 6144;
++            if (drop || lowInTick)
++                esp_rom_printf("HHT W t=%u free %u -> %u\n", (unsigned)now, (unsigned)lastFree, (unsigned)freeNow);
++            hhtSiteDump("W", drop || lowInTick, false, now);
++            lastFree = freeNow;
++            lowInTick = false;
++            nextTick = now + 500;
++            if ((int32_t)(now - nextStatus) >= 0) {
++                esp_rom_printf("HHT S t=%u free=%u min=%u largest=%u psram=%u dropped=%u sitemiss=%u\n", (unsigned)now,
++                               (unsigned)freeNow, (unsigned)low,
++                               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
++                               (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)hhtDropped,
++                               (unsigned)hhtSiteMiss);
++                nextStatus = now + 1000;
++            }
++        }
++        if (now > HHT_SECS * 1000) {
++            hhtOn = false;
++            vTaskDelay(pdMS_TO_TICKS(50));
++            hhtDrain();
++            hhtSiteDump("TOTAL", true, true, now);
++            esp_rom_printf("HHT end t=%u\n", (unsigned)now);
++            vTaskDelete(nullptr);
++        }
++        vTaskDelay(pdMS_TO_TICKS(10));
++    }
 +}
 +
 +static void hopticsHeapTraceStart(void)
 +{
++    hhtRing = (HhtRec *)heap_caps_calloc(HHT_RING, sizeof(HhtRec), MALLOC_CAP_SPIRAM);
++    hhtSites = (HhtSite *)heap_caps_calloc(HHT_SITES, sizeof(HhtSite), MALLOC_CAP_SPIRAM);
++    if (!hhtRing || !hhtSites) {
++        esp_rom_printf("HHT no PSRAM for the trace buffers, trace off\n");
++        return;
++    }
 +    heap_caps_register_failed_alloc_callback(hhtFailed);
-+    const esp_timer_create_args_t a = {.callback = hhtSample, .arg = nullptr, .dispatch_method = ESP_TIMER_TASK, .name = "hht",
-+                                       .skip_unhandled_events = true};
-+    if (esp_timer_create(&a, &hhtTimer) == ESP_OK)
-+        esp_timer_start_periodic(hhtTimer, 20000);
-+    esp_rom_printf("HHT start: internal free %u, largest %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++    esp_rom_printf("HHT start t=%u: internal free %u, largest %u\n", (unsigned)hhtMs(),
++                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
 +                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++    xTaskCreatePinnedToCore(hhtPrinter, "hht", 4096, nullptr, 2, nullptr, tskNO_AFFINITY);
++    hhtOn = true;
 +}
 +#endif
 +
@@ -204,7 +475,7 @@ index 2b58bd1..26e7156 100644
      // initialize power HAL layer as early as possible
      powerHAL_init();
  
-@@ -880,6 +979,11 @@ void setup()
+@@ -880,6 +1250,11 @@ void setup()
      // Initialize transmit history to persist broadcast throttle timers across reboots
      TransmitHistory::getInstance()->loadFromDisk();
  #if HAS_TFT
@@ -954,14 +1225,14 @@ index 73a863d..3215a82 100644
 +  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 +  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 diff --git a/variants/esp32s3/heltec_v4_r8/platformio.ini b/variants/esp32s3/heltec_v4_r8/platformio.ini
-index bf7f08a..e6157ab 100644
+index bf7f08a..bf7adb8 100644
 --- a/variants/esp32s3/heltec_v4_r8/platformio.ini
 +++ b/variants/esp32s3/heltec_v4_r8/platformio.ini
 @@ -51,6 +51,7 @@ board_level = release
  build_flags = 
    ${heltec_v4_r8_base.build_flags} ;-Os
    -D HELTEC_V4_R8_TFT
-+  -D HOPTICS_HEAP_TRACE ; diagnostic build: start-up memory trace (not for releases)
++  -D HOPTICS_HEAP_TRACE
    -D I2C_SDA=17
    -D I2C_SCL=18
    -D PIN_BUTTON2=46
