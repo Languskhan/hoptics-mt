@@ -515,6 +515,149 @@ index 704813c..13bb361 100644
  }
  #endif
  
+diff --git a/src/modules/Modules.cpp b/src/modules/Modules.cpp
+index 47d2913..559415b 100644
+--- a/src/modules/Modules.cpp
++++ b/src/modules/Modules.cpp
+@@ -268,8 +268,8 @@ void setupModules()
+     new DeviceTelemetryModule();
+ #endif
+ #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+-    if (moduleConfig.has_telemetry &&
+-        (moduleConfig.telemetry.environment_measurement_enabled || moduleConfig.telemetry.environment_screen_enabled)) {
++    if (HOPTICS_ENV_READ || (moduleConfig.has_telemetry && (moduleConfig.telemetry.environment_measurement_enabled ||
++                                                            moduleConfig.telemetry.environment_screen_enabled))) {
+         environmentTelemetryModule = new EnvironmentTelemetryModule();
+     }
+ #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_AIR_QUALITY_SENSOR
+diff --git a/src/modules/Telemetry/EnvironmentTelemetry.cpp b/src/modules/Telemetry/EnvironmentTelemetry.cpp
+index b1f6498..5c2c508 100644
+--- a/src/modules/Telemetry/EnvironmentTelemetry.cpp
++++ b/src/modules/Telemetry/EnvironmentTelemetry.cpp
+@@ -277,7 +277,7 @@ void EnvironmentTelemetryModule::refreshDisplayedMeasurement()
+ 
+ void EnvironmentTelemetryModule::i2cScanFinished(ScanI2C *i2cScanner)
+ {
+-    if (!moduleConfig.telemetry.environment_measurement_enabled && !ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE) {
++    if (!moduleConfig.telemetry.environment_measurement_enabled && !ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE && !HOPTICS_ENV_READ) {
+         return;
+     }
+     LOG_INFO("Environment Telemetry adding I2C devices");
+@@ -413,7 +413,7 @@ int32_t EnvironmentTelemetryModule::runOnce()
+     uint32_t result = UINT32_MAX;
+ 
+     if (!(moduleConfig.telemetry.environment_measurement_enabled || moduleConfig.telemetry.environment_screen_enabled ||
+-          ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE)) {
++          ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE || HOPTICS_ENV_READ)) {
+         // If this module is not enabled, and the user doesn't want the display screen don't waste any OSThread time on it
+         return disable();
+     }
+@@ -422,7 +422,7 @@ int32_t EnvironmentTelemetryModule::runOnce()
+         // This is the first time the OSThread library has called this function, so do some setup
+         firstTime = 0;
+ 
+-        if (moduleConfig.telemetry.environment_measurement_enabled || ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE) {
++        if (moduleConfig.telemetry.environment_measurement_enabled || ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE || HOPTICS_ENV_READ) {
+             LOG_INFO("Environment Telemetry: init");
+ 
+             // check if we have at least one sensor
+@@ -459,7 +459,7 @@ int32_t EnvironmentTelemetryModule::runOnce()
+         return result == UINT32_MAX ? disable() : setStartDelay();
+     } else {
+         // if we somehow got to a second run of this module with measurement disabled, then just wait forever
+-        if (!moduleConfig.telemetry.environment_measurement_enabled && !ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE) {
++        if (!moduleConfig.telemetry.environment_measurement_enabled && !ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE && !HOPTICS_ENV_READ) {
+             return disable();
+         }
+ 
+@@ -479,7 +479,7 @@ int32_t EnvironmentTelemetryModule::runOnce()
+ 
+         uint32_t lastTelemetry =
+             transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_ENVIRONMENT_TELEMETRY) : 0;
+-        if (((lastTelemetry == 0) || immediateSendRequested ||
++        if ((!HOPTICS_ENV_READ || HOPTICS_ENV_SHARE) && ((lastTelemetry == 0) || immediateSendRequested ||
+              !Throttle::isWithinTimespanMs(
+                  lastTelemetry, Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.environment_update_interval,
+                                                                         default_telemetry_broadcast_interval_secs, numOnlineNodes,
+@@ -811,7 +811,8 @@ meshtastic_MeshPacket *EnvironmentTelemetryModule::allocReply()
+             return NULL;
+         }
+         // Check for a request for environment metrics
+-        if (decoded->which_variant == meshtastic_Telemetry_environment_metrics_tag) {
++        // (Hoptics MT: readings are local-only unless sharing is on, so don't answer requests then)
++        if (decoded->which_variant == meshtastic_Telemetry_environment_metrics_tag && (!HOPTICS_ENV_READ || HOPTICS_ENV_SHARE)) {
+             meshtastic_Telemetry m = meshtastic_Telemetry_init_zero;
+             if (getEnvironmentTelemetry(&m)) {
+                 LOG_INFO("Environment telemetry reply to request");
+diff --git a/src/modules/Telemetry/EnvironmentTelemetry.h b/src/modules/Telemetry/EnvironmentTelemetry.h
+index 0aabe86..016f649 100644
+--- a/src/modules/Telemetry/EnvironmentTelemetry.h
++++ b/src/modules/Telemetry/EnvironmentTelemetry.h
+@@ -10,6 +10,15 @@
+ #define ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE 0
+ #endif
+ 
++// Hoptics MT: always read the attached sensors so the touch screen and web page can show them.
++// Readings go out on the mesh only when "environment_measurement_enabled" (Share readings) is on.
++#ifdef HOPTICS_UI
++#define HOPTICS_ENV_READ 1
++#else
++#define HOPTICS_ENV_READ 0
++#endif
++#define HOPTICS_ENV_SHARE (moduleConfig.telemetry.environment_measurement_enabled || ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE)
++
+ #include "../mesh/generated/meshtastic/telemetry.pb.h"
+ #include "NodeDB.h"
+ #include "ProtobufModule.h"
+diff --git a/src/modules/Telemetry/Sensor/SHTXXSensor.cpp b/src/modules/Telemetry/Sensor/SHTXXSensor.cpp
+index 1512e7c..502d50d 100644
+--- a/src/modules/Telemetry/Sensor/SHTXXSensor.cpp
++++ b/src/modules/Telemetry/Sensor/SHTXXSensor.cpp
+@@ -9,6 +9,21 @@
+ 
+ SHTXXSensor::SHTXXSensor() : TelemetrySensor(meshtastic_TelemetrySensorType_SHTXX, "SHTXX") {}
+ 
++#ifdef HOPTICS_UI
++// Hoptics MT: the GXHTC3 (SHTC3 clone at 0x70) on the Heltec V4 expansion boards starts up asleep
++// and NACKs every command except wake-up, so the stock init fails. Wake it before init and reads.
++static void hopticsWakeShtc3(TwoWire *bus, uint8_t addr)
++{
++    if (!bus || addr != SHTC3_ADDR)
++        return;
++    bus->beginTransmission(addr);
++    bus->write(0x35);
++    bus->write(0x17);
++    bus->endTransmission();
++    delayMicroseconds(400);
++}
++#endif
++
+ void SHTXXSensor::getSensorVariant(SHTSensor::SHTSensorType sensorType)
+ {
+     switch (sensorType) {
+@@ -49,6 +64,12 @@ bool SHTXXSensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
+     _bus = bus;
+     _address = dev->address.address;
+ 
++#ifdef HOPTICS_UI
++    if (_address == SHTC3_ADDR) {
++        hopticsWakeShtc3(_bus, _address);
++        sht.mSensorType = SHTSensor::SHTSensorType::SHTC3; // only the SHTC family lives at 0x70; skip probing others
++    }
++#endif
+     if (sht.init(*_bus)) {
+         LOG_INFO("%s init success", sensorName);
+         getSensorVariant(sht.mSensorType);
+@@ -85,6 +106,9 @@ bool SHTXXSensor::setAccuracy(SHTSensor::SHTAccuracy newAccuracy)
+ 
+ bool SHTXXSensor::getMetrics(meshtastic_Telemetry *measurement)
+ {
++#ifdef HOPTICS_UI
++    hopticsWakeShtc3(_bus, _address);
++#endif
+     if (sht.readSample()) {
+         measurement->variant.environment_metrics.has_temperature = true;
+         measurement->variant.environment_metrics.has_relative_humidity = true;
 diff --git a/src/modules/TrafficManagementModule.h b/src/modules/TrafficManagementModule.h
 index 44d2400..c4311cb 100644
 --- a/src/modules/TrafficManagementModule.h
