@@ -544,10 +544,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..195cf81
+index 0000000..75f62b4
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,496 @@
+@@ -0,0 +1,560 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -564,6 +564,7 @@ index 0000000..195cf81
 +
 +#include "graphics/view/TFT/HopticsTiles.h"
 +#include "lvgl.h"
++#include <cmath>
 +#include <functional>
 +#include <stdint.h>
 +#include <string>
@@ -593,11 +594,14 @@ index 0000000..195cf81
 +#ifndef HOPTICS_MAX_DM_CONVS
 +#define HOPTICS_MAX_DM_CONVS 40 // direct-message conversations kept (oldest idle one is dropped)
 +#endif
++#ifndef HOPTICS_ENV_HISTORY
++#define HOPTICS_ENV_HISTORY 288 // own sensor history: 5-minute averages, 24 h
++#endif
 +#ifndef HOPTICS_NAME
 +#define HOPTICS_NAME "HOPTICS MT"
 +#endif
 +#ifndef HOPTICS_VERSION
-+#define HOPTICS_VERSION "0.2.1"
++#define HOPTICS_VERSION "0.2.2"
 +#endif
 +
 +class HopticsUI
@@ -661,6 +665,19 @@ index 0000000..195cf81
 +        int32_t cityIdx = -2; // -2 = not looked up yet, -1 = none near
 +        float cityKm = 0;
 +        uint16_t cityBearing = 0;
++        // last environment reading (NAN = not reported); envTime = when it arrived
++        float envTemp = NAN, envHum = NAN, envPress = NAN, envLux = NAN;
++        int16_t envIaq = -1;
++        uint32_t envTime = 0;
++    };
++
++    // one environment sensor reading; any field may be missing (NAN / -1)
++    struct EnvReading {
++        float temp = NAN;  // deg C
++        float hum = NAN;   // % relative humidity
++        float press = NAN; // hPa
++        float lux = NAN;
++        int iaq = -1; // 0..500 (BME680)
 +    };
 +
 +    struct Msg {
@@ -714,6 +731,8 @@ index 0000000..195cf81
 +        std::function<void(uint32_t convKey)> conversationRead;
 +        std::function<void(int theme)> setTheme;
 +        std::function<void(bool on)> setWebChat;
++        // environment sensors: share = send readings to the mesh every intervalSecs (the radio restarts)
++        std::function<void(bool share, uint32_t intervalSecs)> setEnvSharing;
 +    };
 +
 +    enum Theme { TH_MIDNIGHT = 0, TH_DAYLIGHT, TH_NIGHT_RED, TH_AMBER, TH_COUNT };
@@ -739,6 +758,9 @@ index 0000000..195cf81
 +    void updateMetrics(uint32_t num, uint8_t battery, float voltage, float chUtil, float airUtil);
 +    void updateSignal(uint32_t num, int16_t rssi, float snr);
 +    void updateHops(uint32_t num, int8_t hops);
++    void updateEnvironment(uint32_t num, const EnvReading &r);
++    // telemetry settings from the radio (share = environment readings go out on the mesh)
++    void setEnvConfig(bool share, uint32_t intervalSecs, bool fahrenheit);
 +    void onPacket(uint32_t from, uint32_t to, uint16_t port, int8_t hops, int16_t rssi, float snr, uint32_t time, bool viaMqtt);
 +    void addMessage(uint32_t convKey, uint32_t from, uint32_t time, const char *text, uint32_t requestId, uint8_t status,
 +                    bool restoring);
@@ -821,6 +843,21 @@ index 0000000..195cf81
 +    void wizardStep(int step);
 +    void buildReportOverlay(void);
 +    std::string reportStatus(void) const;
++    void buildEnvOverlay(void);
++    void openEnv(void);
++    void closeEnv(void);
++    void refreshEnvOverlay(void);
++    void refreshHomeEnv(void);
++    void envBucket(void); // every minute: closes a 5-minute history bucket
++    void envPush(const float v[3]); // one history row: deg C, % RH, hPa (NAN = none)
++    bool envHasData(void) const { return !std::isnan(envNow.temp) || !std::isnan(envNow.hum) || !std::isnan(envNow.press); }
++    bool tempF(void) const;
++    bool pressInHg(void) const;
++    void fmtTemp(char *buf, size_t len, float c, bool unit = true) const;
++    void fmtPress(char *buf, size_t len, float hPa, bool unit = true) const;
++    void fillEnvChart(lv_obj_t *chart, lv_chart_series_t *ser, int which, lv_obj_t *caption);
++    const char *pressTrend(void) const;
++    std::string envLine(const Node &n) const;
 +    void lookupCity(Node &n);
 +
 +    void selectTab(Tab t);
@@ -920,6 +957,22 @@ index 0000000..195cf81
 +    int32_t histChUtil[HOPTICS_HISTORY];
 +    int32_t histAirUtil[HOPTICS_HISTORY];
 +    int32_t histPktRate[HOPTICS_HISTORY];
++
++    // environment: this radio's own sensors. History rows are 5-minute means, oldest first,
++    // temperature in 0.1 C, humidity in 0.1 %, pressure in 0.1 hPa; INT16_MIN = no reading.
++    EnvReading envNow;
++    uint32_t envNowTime = 0;
++    int16_t *envHist = nullptr; // 3 x HOPTICS_ENV_HISTORY (PSRAM when there is some)
++    uint16_t envHistCount = 0;
++    float envSum[3] = {0, 0, 0};
++    uint16_t envSumN[3] = {0, 0, 0};
++    uint8_t envMinute = 0;
++    uint32_t minutesUp = 0;
++    bool envShare = false, envCfgKnown = false, envRadioF = false;
++    uint32_t envShareSecs = 0;
++    int8_t envUnitF = -1, envUnitInHg = -1; // -1 = not chosen yet (follows the region)
++    uint8_t envDirty = 0xff; // bit 0: Home chart, bit 1: detail page
++    bool envUnitsLoaded = false;
 +
 +    // dirty flags - widgets are only touched when visible & dirty
 +    bool dirtyHome = true, dirtyLive = true, dirtyChats = true, dirtyNodes = true, dirtyStats = true, dirtyNodeOv = true;
@@ -1027,6 +1080,17 @@ index 0000000..195cf81
 +             *setMapSw = nullptr, *setMapInfo = nullptr;
 +    bool settingsLoading = false;
 +
++    // environment card on Home, its detail page, the node page card and the Settings card
++    lv_obj_t *homeEnv = nullptr, *homeEnvTemp = nullptr, *homeEnvUnit = nullptr, *homeEnvHum = nullptr, *homeEnvPress = nullptr,
++             *homeEnvSub = nullptr, *homeEnvChart = nullptr;
++    lv_chart_series_t *homeEnvSer = nullptr;
++    lv_obj_t *envOv = nullptr, *envOvNow = nullptr, *envOvMeta = nullptr, *envOvNearby = nullptr, *envOvNearbyCard = nullptr;
++    lv_obj_t *envOvChart[3] = {nullptr}, *envOvCap[3] = {nullptr};
++    lv_chart_series_t *envOvSer[3] = {nullptr};
++    lv_obj_t *nodeOvEnv = nullptr, *nodeOvEnvText = nullptr;
++    lv_obj_t *setEnvTempDd = nullptr, *setEnvPressDd = nullptr, *setEnvShareSw = nullptr, *setEnvEveryDd = nullptr,
++             *setEnvNote = nullptr;
++
 +    // location / city locator
 +    lv_obj_t *homeLoc = nullptr, *homeLocCity = nullptr, *homeLocSub = nullptr;
 +    int32_t myCityIdx = -2;
@@ -1046,10 +1110,10 @@ index 0000000..195cf81
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..8028fca
+index 0000000..997a864
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,99 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1080,6 +1144,7 @@ index 0000000..8028fca
 +    void updateNode(uint32_t nodeNum, uint8_t channel, const meshtastic_User &cfg) override;
 +    void updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon, int32_t alt, uint32_t sats, uint32_t precision) override;
 +    void updateMetrics(uint32_t nodeNum, const meshtastic_DeviceMetrics &metrics) override;
++    void updateEnvironmentMetrics(uint32_t nodeNum, const meshtastic_EnvironmentMetrics &metrics) override;
 +    void updateSignalStrength(uint32_t nodeNum, int32_t rssi, float snr) override;
 +    void updateHopsAway(uint32_t nodeNum, uint8_t hopsAway) override;
 +    void updateConnectionStatus(const meshtastic_DeviceConnectionStatus &status) override;
@@ -1093,6 +1158,7 @@ index 0000000..8028fca
 +    void updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg) override;
 +    void updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg) override;
 +    void updateExtNotificationModule(const meshtastic_ModuleConfig_ExternalNotificationConfig &cfg) override;
++    void updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg) override;
 +    void updateRingtone(const char rtttl[231]) override;
 +
 +    void packetReceived(const meshtastic_MeshPacket &p) override;
@@ -1139,6 +1205,8 @@ index 0000000..8028fca
 +    bool mqttEnabled = false;
 +    meshtastic_ModuleConfig_ExternalNotificationConfig extNotif{};
 +    bool haveExtNotif = false;
++    meshtastic_ModuleConfig_TelemetryConfig telemetry{};
++    bool haveTelemetry = false;
 +    std::unordered_map<uint32_t, uint8_t> nodeChannels;
 +    std::unordered_map<uint32_t, bool> nodeHasKey;
 +
@@ -2743,10 +2811,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..b85bdab
+index 0000000..1a2a783
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,4800 @@
+@@ -0,0 +1,5557 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -2760,7 +2828,9 @@ index 0000000..b85bdab
 +#include <ctime>
 +#include <initializer_list>
 +
++#include <cstdlib>
 +#if defined(ARDUINO_ARCH_ESP32)
++#include "esp_heap_caps.h"
 +#include "nvs.h"
 +#endif
 +// the street map redraws into the same pixel buffer, so its image-cache entry is dropped on each update
@@ -3122,8 +3192,64 @@ index 0000000..b85bdab
 +}
 +
 +// ================================================================= basics
++namespace
++{
++// temperature / pressure units picked in Settings > SENSORS (NVS "hoptics"; -1 = not picked yet)
++void loadEnvUnits(int8_t &f, int8_t &inhg)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READONLY, &h) == ESP_OK) {
++        int8_t v;
++        if (nvs_get_i8(h, "envf", &v) == ESP_OK)
++            f = v;
++        if (nvs_get_i8(h, "envinhg", &v) == ESP_OK)
++            inhg = v;
++        nvs_close(h);
++    }
++#else
++    (void)f;
++    (void)inhg;
++#endif
++}
++
++void saveEnvUnits(int8_t f, int8_t inhg)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READWRITE, &h) == ESP_OK) {
++        nvs_set_i8(h, "envf", f);
++        nvs_set_i8(h, "envinhg", inhg);
++        nvs_commit(h);
++        nvs_close(h);
++    }
++#else
++    (void)f;
++    (void)inhg;
++#endif
++}
++
++// sensor history lives in PSRAM when the board has some (internal RAM is the scarce kind)
++int16_t *allocEnvHistory(size_t n)
++{
++    size_t bytes = n * sizeof(int16_t);
++#if defined(ARDUINO_ARCH_ESP32)
++    int16_t *p = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++    if (!p)
++        p = (int16_t *)malloc(bytes);
++#else
++    int16_t *p = (int16_t *)malloc(bytes);
++#endif
++    if (p)
++        for (size_t i = 0; i < n; i++)
++            p[i] = INT16_MIN;
++    return p;
++}
++} // namespace
++
 +HopticsUI::HopticsUI(void)
 +{
++    envHist = allocEnvHistory(3 * HOPTICS_ENV_HISTORY);
 +    for (uint32_t i = 0; i < kMaxChannels; i++) {
 +        channelNames[i][0] = 0;
 +        channelEnabled[i] = false;
@@ -3745,6 +3871,10 @@ index 0000000..b85bdab
 +        return;
 +    initFonts();
 +    applyPalette(themeIdx);
++    if (!envUnitsLoaded) {
++        loadEnvUnits(envUnitF, envUnitInHg);
++        envUnitsLoaded = true;
++    }
 +    mainScreen = lv_obj_create(NULL);
 +    lv_obj_remove_flag(mainScreen, LV_OBJ_FLAG_SCROLLABLE);
 +    lv_obj_set_style_bg_color(mainScreen, C_BG, 0);
@@ -3782,6 +3912,7 @@ index 0000000..b85bdab
 +
 +    buildChatOverlay();
 +    buildNodeOverlay();
++    buildEnvOverlay();
 +    buildSettingsOverlay();
 +    buildReportOverlay();
 +    buildWizard();
@@ -3836,6 +3967,7 @@ index 0000000..b85bdab
 +        lv_chart_set_next_value(statSigChart, serSnr, sigSnr[i]);
 +    }
 +    dirtyHome = dirtyLive = dirtyChats = dirtyNodes = dirtyStats = dirtyMap = true;
++    envDirty = 0xff;
 +}
 +
 +void HopticsUI::setTheme(int t)
@@ -4103,6 +4235,44 @@ index 0000000..b85bdab
 +    statTile(grid, "AIRTIME TX", C_VIOLET, &homeAir, &homeAirSub);
 +    statTile(grid, "PACKETS / MIN", C_GREEN, &homeRate, &homeRateSub);
 +
++    // environment sensors on the expansion board - tap for graphs
++    homeEnv = card(p, "ENVIRONMENT  -  this radio's sensors");
++    lv_obj_set_style_bg_color(homeEnv, C_CARD2, LV_STATE_PRESSED);
++    lv_obj_add_event_cb(
++        homeEnv, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openEnv(); }, LV_EVENT_CLICKED, this);
++    {
++        lv_obj_t *er = plain(homeEnv);
++        lv_obj_remove_flag(er, LV_OBJ_FLAG_CLICKABLE); // taps go to the card
++        lv_obj_set_size(er, LV_PCT(100), LV_SIZE_CONTENT);
++        row(er, 4);
++        lv_obj_t *tb = plain(er);
++        lv_obj_remove_flag(tb, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_set_size(tb, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++        lv_obj_set_flex_flow(tb, LV_FLEX_FLOW_ROW);
++        lv_obj_set_flex_align(tb, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
++        lv_obj_set_style_pad_column(tb, 1, 0);
++        homeEnvTemp = label(tb, FBIG, C_AMBER, "--");
++        homeEnvUnit = label(tb, &F16, C_AMBER, "");
++        lv_obj_set_style_pad_bottom(homeEnvUnit, 5, 0);
++        lv_obj_t *sp = plain(er);
++        lv_obj_remove_flag(sp, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_set_size(sp, 1, 1);
++        lv_obj_set_flex_grow(sp, 1);
++        lv_obj_t *rc = plain(er);
++        lv_obj_remove_flag(rc, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_set_size(rc, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++        column(rc, 2);
++        lv_obj_set_flex_align(rc, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
++        homeEnvHum = label(rc, &F14, C_BLUE, "");
++        homeEnvPress = label(rc, &F14, C_VIOLET, "");
++    }
++    homeEnvChart = makeChart(homeEnv, 40, LV_CHART_TYPE_LINE, 12);
++    homeEnvSer = lv_chart_add_series(homeEnvChart, C_AMBER, LV_CHART_AXIS_PRIMARY_Y);
++    lv_obj_add_flag(homeEnvChart, LV_OBJ_FLAG_HIDDEN);
++    homeEnvSub = label(homeEnv, FSMALL, C_MUTED, "");
++    lv_obj_set_width(homeEnvSub, LV_PCT(100));
++    lv_label_set_long_mode(homeEnvSub, LV_LABEL_LONG_MODE_WRAP);
++
 +    homeLoc = card(p, "YOUR LOCATION");
 +    homeLocCity = label(homeLoc, &F16, C_TEXT, "");
 +    lv_obj_set_width(homeLocCity, LV_PCT(100));
@@ -4188,6 +4358,7 @@ index 0000000..b85bdab
 +            lv_obj_add_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
 +    }
 +    lv_label_set_text_fmt(homeRateSub, "%u total", (unsigned)pktTotal);
++    refreshHomeEnv();
 +
 +    snprintf(buf, sizeof(buf), "%s  -  %s", regionName, presetName);
 +    char buf2[160];
@@ -5067,6 +5238,12 @@ index 0000000..b85bdab
 +    lv_obj_set_width(nodeOvName, W() - 2 * PAD - 16 - 66);
 +    nodeOvId = label(col, &F12, C_MUTED, "");
 +
++    nodeOvEnv = card(body, "SENSORS");
++    nodeOvEnvText = label(nodeOvEnv, &F12, C_TEXT, "");
++    lv_obj_set_width(nodeOvEnvText, LV_PCT(100));
++    lv_obj_set_style_text_line_space(nodeOvEnvText, 3, 0);
++    lv_obj_add_flag(nodeOvEnv, LV_OBJ_FLAG_HIDDEN);
++
 +    lv_obj_t *ic = card(body, "DETAILS");
 +    nodeOvInfo = label(ic, &F12, C_TEXT, "");
 +    lv_obj_set_width(nodeOvInfo, LV_PCT(100));
@@ -5203,6 +5380,12 @@ index 0000000..b85bdab
 +        s.pop_back();
 +    lv_label_set_text(nodeOvInfo, s.c_str());
 +
++    if (n->envTime) {
++        lv_label_set_text(nodeOvEnvText, envLine(*n).c_str());
++        lv_obj_remove_flag(nodeOvEnv, LV_OBJ_FLAG_HIDDEN);
++    } else
++        lv_obj_add_flag(nodeOvEnv, LV_OBJ_FLAG_HIDDEN);
++
 +    lv_chart_set_all_values(nodeOvChart, nodeOvSeries, LV_CHART_POINT_NONE);
 +    for (uint8_t i = 0; i < n->snrCount; i++) {
 +        uint8_t idx = (uint8_t)((n->snrIdx + 16 - n->snrCount + i) % 16);
@@ -5222,6 +5405,496 @@ index 0000000..b85bdab
 +        char buf[16];
 +        std::string t = std::string(LV_SYMBOL_SHUFFLE " Route to ") + nodeShort(target, buf, sizeof(buf)) + ": " + text;
 +        showToast(t.c_str(), 6000);
++    }
++}
++
++// ================================================================= ENVIRONMENT
++// Both kits carry sensors on the expansion board (BME280: temperature, humidity, pressure; GXHTC3:
++// temperature, humidity). The firmware reads them about once a minute and hands each reading to the
++// screen; it only goes out on the mesh when sharing is on (Settings > SENSORS).
++namespace
++{
++constexpr int16_t ENV_NONE = INT16_MIN;
++constexpr uint8_t ENV_STEP_MIN = 5; // minutes per history row
++const uint32_t ENV_SHARE_SECS[] = {1800, 3600, 7200, 21600, 43200};
++const char *const ENV_SHARE_OPTS = "30 minutes\n1 hour\n2 hours\n6 hours\n12 hours";
++const char *const ENV_TITLES[3] = {"TEMPERATURE", "HUMIDITY", "PRESSURE"};
++
++// dew point (Magnus formula), deg C
++float dewPointC(float t, float rh)
++{
++    if (std::isnan(t) || std::isnan(rh) || rh <= 0)
++        return NAN;
++    const float a = 17.62f, b = 243.12f;
++    float g = logf(rh / 100.0f) + a * t / (b + t);
++    return b * g / (a - g);
++}
++
++const char *shareEveryText(uint32_t secs)
++{
++    static char b[24];
++    if (secs == 0)
++        secs = 1800;
++    if (secs % 3600 == 0)
++        snprintf(b, sizeof(b), "%u hour%s", (unsigned)(secs / 3600), secs == 3600 ? "" : "s");
++    else
++        snprintf(b, sizeof(b), "%u minutes", (unsigned)(secs / 60));
++    return b;
++}
++} // namespace
++
++bool HopticsUI::tempF(void) const
++{
++    if (envUnitF >= 0)
++        return envUnitF != 0;
++    return envRadioF || region == 1; // not picked yet: Fahrenheit in the US
++}
++
++bool HopticsUI::pressInHg(void) const
++{
++    if (envUnitInHg >= 0)
++        return envUnitInHg != 0;
++    return tempF();
++}
++
++void HopticsUI::fmtTemp(char *buf, size_t len, float c, bool unit) const
++{
++    if (std::isnan(c)) {
++        snprintf(buf, len, "--");
++        return;
++    }
++    bool f = tempF();
++    float v = f ? c * 9.0f / 5.0f + 32.0f : c;
++    if (unit)
++        snprintf(buf, len, "%.1f\xC2\xB0%c", v, f ? 'F' : 'C');
++    else
++        snprintf(buf, len, "%.1f", v);
++}
++
++void HopticsUI::fmtPress(char *buf, size_t len, float hPa, bool unit) const
++{
++    if (std::isnan(hPa)) {
++        snprintf(buf, len, "--");
++        return;
++    }
++    if (pressInHg())
++        snprintf(buf, len, unit ? "%.2f inHg" : "%.2f", hPa * 0.0295300f);
++    else
++        snprintf(buf, len, unit ? "%.0f hPa" : "%.0f", hPa);
++}
++
++void HopticsUI::updateEnvironment(uint32_t num, const EnvReading &in)
++{
++    if (num == 0)
++        return;
++    EnvReading r = in;
++    // drop values no real sensor reports (a missing or failing sensor can send zeros or garbage)
++    if (!(r.temp > -60.0f && r.temp < 90.0f))
++        r.temp = NAN;
++    if (!(r.hum > 0.0f && r.hum <= 100.5f))
++        r.hum = NAN;
++    if (!(r.press > 300.0f && r.press < 1200.0f))
++        r.press = NAN;
++    if (!(r.lux >= 0.0f))
++        r.lux = NAN;
++    if (r.iaq < 0 || r.iaq > 500)
++        r.iaq = -1;
++    if (std::isnan(r.temp) && std::isnan(r.hum) && std::isnan(r.press) && std::isnan(r.lux) && r.iaq < 0)
++        return; // e.g. a power-monitor-only report
++    Node &n = nodeRef(num);
++    n.envTemp = r.temp;
++    n.envHum = r.hum;
++    n.envPress = r.press;
++    n.envLux = r.lux;
++    n.envIaq = (int16_t)r.iaq;
++    n.envTime = nowTs;
++    if (num == myNode) {
++        envNow = r;
++        envNowTime = nowTs;
++        float v[3] = {r.temp, r.hum, r.press};
++        if (envHistCount == 0) {
++            envPush(v); // first reading: start the graphs right away
++            envMinute = 0;
++        } else {
++            for (int k = 0; k < 3; k++)
++                if (!std::isnan(v[k])) {
++                    envSum[k] += v[k];
++                    envSumN[k]++;
++                }
++        }
++        dirtyHome = true;
++    }
++    if (num == nodeOvNum)
++        dirtyNodeOv = true;
++    envDirty |= 2;
++}
++
++void HopticsUI::setEnvConfig(bool share, uint32_t intervalSecs, bool fahrenheit)
++{
++    envShare = share;
++    envShareSecs = intervalSecs;
++    envRadioF = fahrenheit;
++    envCfgKnown = true;
++    envDirty = 0xff;
++    dirtyHome = true;
++}
++
++void HopticsUI::envPush(const float v[3])
++{
++    if (!envHist)
++        return;
++    for (int k = 0; k < 3; k++) {
++        int16_t *h = envHist + k * HOPTICS_ENV_HISTORY;
++        memmove(h, h + 1, sizeof(int16_t) * (HOPTICS_ENV_HISTORY - 1));
++        h[HOPTICS_ENV_HISTORY - 1] = std::isnan(v[k]) ? ENV_NONE : (int16_t)lroundf(v[k] * 10.0f);
++    }
++    if (envHistCount < HOPTICS_ENV_HISTORY)
++        envHistCount++;
++    envDirty = 0xff;
++}
++
++void HopticsUI::envBucket(void)
++{
++    if (++envMinute < ENV_STEP_MIN)
++        return;
++    envMinute = 0;
++    if (envHistCount == 0)
++        return; // no reading yet: don't start the graphs with gaps
++    float v[3];
++    for (int k = 0; k < 3; k++) {
++        v[k] = envSumN[k] ? envSum[k] / envSumN[k] : NAN;
++        envSum[k] = 0;
++        envSumN[k] = 0;
++    }
++    envPush(v);
++}
++
++const char *HopticsUI::pressTrend(void) const
++{
++    // change over the last ~3 hours, scaled to hPa per 3 h (weather-station convention)
++    if (!envHist || envHistCount < 12)
++        return nullptr;
++    const int16_t *h = envHist + 2 * HOPTICS_ENV_HISTORY;
++    int first = HOPTICS_ENV_HISTORY - envHistCount;
++    int last = HOPTICS_ENV_HISTORY - 1;
++    while (last > first && h[last] == ENV_NONE)
++        last--;
++    int lo = std::max(first, last - 36);
++    while (lo < last && h[lo] == ENV_NONE)
++        lo++;
++    if (last - lo < 12)
++        return nullptr;
++    float d = (h[last] - h[lo]) / 10.0f * 36.0f / (float)(last - lo);
++    if (d >= 3.0f)
++        return LV_SYMBOL_UP " rising fast";
++    if (d >= 1.0f)
++        return LV_SYMBOL_UP " rising";
++    if (d <= -3.0f)
++        return LV_SYMBOL_DOWN " falling fast";
++    if (d <= -1.0f)
++        return LV_SYMBOL_DOWN " falling";
++    return "steady";
++}
++
++void HopticsUI::fillEnvChart(lv_obj_t *chart, lv_chart_series_t *ser, int k, lv_obj_t *cap)
++{
++    if (!chart || !ser)
++        return;
++    // window grows with the data so a fresh start still fills the graph: 1, 3, 6, 12, 24 h
++    static const uint32_t steps[] = {12, 36, 72, 144, 288};
++    uint32_t n = HOPTICS_ENV_HISTORY;
++    for (uint32_t s : steps)
++        if (envHistCount <= s) {
++            n = std::min<uint32_t>(s, HOPTICS_ENV_HISTORY);
++            break;
++        }
++    if (lv_chart_get_point_count(chart) != n)
++        lv_chart_set_point_count(chart, n);
++    const int16_t *h = envHist ? envHist + k * HOPTICS_ENV_HISTORY : nullptr;
++    const float scale = (k == 2 && pressInHg()) ? 1000.0f : 100.0f; // chart works in integers
++    int32_t lo = INT32_MAX, hi = INT32_MIN;
++    for (uint32_t i = 0; i < n; i++) {
++        int16_t raw = h ? h[HOPTICS_ENV_HISTORY - n + i] : ENV_NONE;
++        int32_t v = LV_CHART_POINT_NONE;
++        if (raw != ENV_NONE) {
++            float f = raw / 10.0f;
++            if (k == 0 && tempF())
++                f = f * 9.0f / 5.0f + 32.0f;
++            else if (k == 2 && pressInHg())
++                f *= 0.0295300f;
++            v = (int32_t)lroundf(f * scale);
++            lo = std::min(lo, v);
++            hi = std::max(hi, v);
++        }
++        lv_chart_set_series_value_by_id(chart, ser, i, v);
++    }
++    if (lo > hi) {
++        lv_chart_set_axis_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
++        if (cap)
++            lv_label_set_text(cap, "No readings yet");
++    } else {
++        // keep small wiggles small: a minimum visible span per quantity
++        int32_t minSpan = k == 0 ? 400 : k == 1 ? 1000 : (pressInHg() ? 60 : 200);
++        int32_t span = std::max(hi - lo, minSpan);
++        int32_t mid = (hi + lo) / 2;
++        lv_chart_set_axis_range(chart, LV_CHART_AXIS_PRIMARY_Y, mid - span * 6 / 10, mid + span * 6 / 10);
++        if (cap) {
++            char a[16], b[16], w[16];
++            const char *fmt = k == 1 ? "%.0f%%" : (k == 2 && pressInHg()) ? "%.2f" : k == 2 ? "%.0f" : "%.1f\xC2\xB0";
++            snprintf(a, sizeof(a), fmt, lo / scale);
++            snprintf(b, sizeof(b), fmt, hi / scale);
++            uint32_t mins = n * ENV_STEP_MIN;
++            snprintf(w, sizeof(w), "%u h", (unsigned)(mins / 60));
++            lv_label_set_text_fmt(cap, "low %s   high %s   -   last %s", a, b, w);
++        }
++    }
++    lv_chart_refresh(chart);
++}
++
++std::string HopticsUI::envLine(const Node &n) const
++{
++    char b[32];
++    std::string s;
++    if (!std::isnan(n.envTemp)) {
++        fmtTemp(b, sizeof(b), n.envTemp);
++        s += std::string("Temperature: ") + b + "\n";
++    }
++    if (!std::isnan(n.envHum)) {
++        snprintf(b, sizeof(b), "%.0f%%", n.envHum);
++        s += std::string("Humidity: ") + b + "\n";
++    }
++    if (!std::isnan(n.envPress)) {
++        fmtPress(b, sizeof(b), n.envPress);
++        s += std::string("Pressure: ") + b + "\n";
++    }
++    if (!std::isnan(n.envLux)) {
++        snprintf(b, sizeof(b), "%.0f lux", n.envLux);
++        s += std::string("Light: ") + b + "\n";
++    }
++    if (n.envIaq >= 0) {
++        snprintf(b, sizeof(b), "%d", (int)n.envIaq);
++        s += std::string("Air quality (IAQ): ") + b + "\n";
++    }
++    char ago[12];
++    agoString(n.envTime, ago, sizeof(ago));
++    s += std::string("Updated ") + ago + " ago";
++    return s;
++}
++
++void HopticsUI::refreshHomeEnv(void)
++{
++    if (!homeEnv)
++        return;
++    char b[40], c[64], ago[12];
++    if (!envHasData()) {
++        lv_label_set_text(homeEnvTemp, "--");
++        lv_label_set_text(homeEnvUnit, "");
++        lv_label_set_text(homeEnvHum, "");
++        lv_label_set_text(homeEnvPress, "");
++        lv_label_set_text(homeEnvSub, minutesUp >= 5 ? "No sensor readings yet. Is the sensor board seated? Tap for more."
++                                                     : "Starting the sensors - the first reading comes in about a minute.");
++        lv_obj_add_flag(homeEnvChart, LV_OBJ_FLAG_HIDDEN);
++        return;
++    }
++    fmtTemp(b, sizeof(b), envNow.temp, false);
++    lv_label_set_text(homeEnvTemp, b);
++    lv_label_set_text(homeEnvUnit, std::isnan(envNow.temp) ? "" : (tempF() ? "\xC2\xB0" "F" : "\xC2\xB0" "C"));
++    if (std::isnan(envNow.hum))
++        lv_label_set_text(homeEnvHum, "");
++    else
++        lv_label_set_text_fmt(homeEnvHum, "%.0f%% humidity", envNow.hum);
++    if (std::isnan(envNow.press))
++        lv_label_set_text(homeEnvPress, "");
++    else {
++        fmtPress(b, sizeof(b), envNow.press);
++        const char *tr = pressTrend(); // Home shows just the arrow
++        const char *arrow = "";
++        if (tr && strncmp(tr, LV_SYMBOL_UP, strlen(LV_SYMBOL_UP)) == 0)
++            arrow = " " LV_SYMBOL_UP;
++        else if (tr && strncmp(tr, LV_SYMBOL_DOWN, strlen(LV_SYMBOL_DOWN)) == 0)
++            arrow = " " LV_SYMBOL_DOWN;
++        snprintf(c, sizeof(c), "%s%s", b, arrow);
++        lv_label_set_text(homeEnvPress, c);
++    }
++    agoString(envNowTime, ago, sizeof(ago));
++    if (!std::isnan(envNow.hum) && !std::isnan(envNow.temp)) {
++        fmtTemp(c, sizeof(c), dewPointC(envNow.temp, envNow.hum));
++        lv_label_set_text_fmt(homeEnvSub, "Dew point %s   -   updated %s ago   " LV_SYMBOL_RIGHT, c, ago);
++    } else
++        lv_label_set_text_fmt(homeEnvSub, "Updated %s ago   " LV_SYMBOL_RIGHT, ago);
++    lv_obj_remove_flag(homeEnvChart, LV_OBJ_FLAG_HIDDEN);
++    if (envDirty & 1) {
++        envDirty &= ~1;
++        int k = std::isnan(envNow.temp) ? 1 : 0;
++        lv_chart_set_series_color(homeEnvChart, homeEnvSer, k == 0 ? C_AMBER : C_BLUE);
++        fillEnvChart(homeEnvChart, homeEnvSer, k, nullptr);
++    }
++}
++
++void HopticsUI::buildEnvOverlay(void)
++{
++    envOv = overlayPanel("Environment", nullptr, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeEnv(); });
++    lv_obj_t *body = plain(envOv);
++    lv_obj_set_width(body, LV_PCT(100));
++    lv_obj_set_flex_grow(body, 1);
++    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_scroll_dir(body, LV_DIR_VER);
++    lv_obj_set_style_pad_all(body, PAD, 0);
++    column(body, PAD);
++
++    lv_obj_t *nc = card(body, "NOW  -  this radio's sensors");
++    envOvNow = label(nc, &F20, C_TEXT, "");
++    lv_obj_set_width(envOvNow, LV_PCT(100));
++    lv_label_set_long_mode(envOvNow, LV_LABEL_LONG_MODE_WRAP);
++    envOvMeta = label(nc, &F12, C_MUTED, "");
++    lv_obj_set_width(envOvMeta, LV_PCT(100));
++    lv_label_set_long_mode(envOvMeta, LV_LABEL_LONG_MODE_WRAP);
++    lv_obj_set_style_text_line_space(envOvMeta, 3, 0);
++
++    const lv_color_t cols[3] = {C_AMBER, C_BLUE, C_VIOLET};
++    for (int k = 0; k < 3; k++) {
++        lv_obj_t *c = card(body, ENV_TITLES[k]);
++        envOvChart[k] = makeChart(c, 72, LV_CHART_TYPE_LINE, 12);
++        envOvSer[k] = lv_chart_add_series(envOvChart[k], cols[k], LV_CHART_AXIS_PRIMARY_Y);
++        envOvCap[k] = label(c, FSMALL, C_MUTED, "");
++    }
++
++    envOvNearbyCard = card(body, "SENSORS ON THE MESH");
++    envOvNearby = plain(envOvNearbyCard);
++    lv_obj_set_size(envOvNearby, LV_PCT(100), LV_SIZE_CONTENT);
++    column(envOvNearby, 2);
++
++    lv_obj_t *hint = label(body, FSMALL, C_DIM,
++                           "Graphs are 5-minute averages since the radio started (up to 24 h). Units and sharing: "
++                           "Settings > SENSORS.");
++    lv_obj_set_width(hint, LV_PCT(100));
++    lv_label_set_long_mode(hint, LV_LABEL_LONG_MODE_WRAP);
++}
++
++void HopticsUI::openEnv(void)
++{
++    if (!envOv)
++        return;
++    envDirty |= 2;
++    refreshEnvOverlay();
++    lv_obj_scroll_to_y(lv_obj_get_child(envOv, 1), 0, LV_ANIM_OFF);
++    lv_obj_remove_flag(envOv, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_to_index(envOv, -1);
++    lv_obj_move_to_index(toast, -1);
++}
++
++void HopticsUI::closeEnv(void)
++{
++    if (envOv)
++        lv_obj_add_flag(envOv, LV_OBJ_FLAG_HIDDEN);
++}
++
++void HopticsUI::refreshEnvOverlay(void)
++{
++    if (!envOv)
++        return;
++    char a[32], b[32], ago[12];
++    std::string meta;
++    if (!envHasData()) {
++        lv_label_set_text(envOvNow, "No readings yet");
++        meta = minutesUp >= 5 ? "Nothing from the sensors so far. Check that the expansion board is seated; the log "
++                                "lists the sensors found at start-up."
++                              : "The sensors are read about once a minute.";
++    } else {
++        fmtTemp(a, sizeof(a), envNow.temp);
++        if (std::isnan(envNow.hum))
++            lv_label_set_text(envOvNow, a);
++        else
++            lv_label_set_text_fmt(envOvNow, "%s   %.0f%%", a, envNow.hum);
++        if (!std::isnan(envNow.temp) && !std::isnan(envNow.hum)) {
++            fmtTemp(b, sizeof(b), dewPointC(envNow.temp, envNow.hum));
++            meta += std::string("Dew point ") + b + "\n";
++        }
++        if (!std::isnan(envNow.press)) {
++            fmtPress(b, sizeof(b), envNow.press);
++            meta += std::string("Pressure ") + b;
++            const char *tr = pressTrend();
++            if (tr)
++                meta += std::string("   ") + tr;
++            meta += "\n";
++        }
++        if (!std::isnan(envNow.lux)) {
++            snprintf(b, sizeof(b), "Light %.0f lux\n", envNow.lux);
++            meta += b;
++        }
++        if (envNow.iaq >= 0) {
++            snprintf(b, sizeof(b), "Air quality (IAQ) %d\n", envNow.iaq);
++            meta += b;
++        }
++        agoString(envNowTime, ago, sizeof(ago));
++        meta += std::string("Updated ") + ago + " ago";
++    }
++    if (envCfgKnown)
++        meta += envShare ? std::string("\nShared on the mesh every ") + shareEveryText(envShareSecs)
++                         : std::string("\nNot shared - shown here and on the web page only");
++    lv_label_set_text(envOvMeta, meta.c_str());
++
++    if (envDirty & 2) {
++        for (int k = 0; k < 3; k++)
++            fillEnvChart(envOvChart[k], envOvSer[k], k, envOvCap[k]);
++    }
++    envDirty &= ~2;
++
++    // other nodes that shared readings, newest first
++    std::vector<const Node *> list;
++    for (const auto &n : nodes)
++        if (n.envTime && n.num != myNode && n.envTime <= nowTs + 60)
++            list.push_back(&n);
++    std::sort(list.begin(), list.end(), [](const Node *x, const Node *y) { return x->envTime > y->envTime; });
++    if (list.size() > 8)
++        list.resize(8);
++    lv_obj_clean(envOvNearby);
++    if (list.empty()) {
++        lv_obj_t *l = label(envOvNearby, &F12, C_MUTED, "No other node has shared readings yet.");
++        lv_obj_set_width(l, LV_PCT(100));
++        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
++        return;
++    }
++    for (const Node *n : list) {
++        lv_obj_t *r = plain(envOvNearby);
++        lv_obj_set_size(r, LV_PCT(100), 26);
++        row(r, 6);
++        lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_set_style_bg_color(r, C_CARD2, LV_STATE_PRESSED);
++        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_STATE_PRESSED);
++        lv_obj_set_style_radius(r, 6, 0);
++        lv_obj_t *bd = makeBadge(r, 40, 20, &F12);
++        setBadge(bd, n->num);
++        char nm[48];
++        lv_obj_t *name = label(r, &F12, C_TEXT, nodeLong(n->num, nm, sizeof(nm)));
++        lv_obj_set_flex_grow(name, 1);
++        oneLine(name);
++        std::string v;
++        if (!std::isnan(n->envTemp)) {
++            fmtTemp(a, sizeof(a), n->envTemp);
++            v += a;
++        }
++        if (!std::isnan(n->envHum)) {
++            snprintf(b, sizeof(b), "%s%.0f%%", v.empty() ? "" : "  ", n->envHum);
++            v += b;
++        }
++        if (v.empty() && !std::isnan(n->envPress)) {
++            fmtPress(a, sizeof(a), n->envPress);
++            v = a;
++        }
++        label(r, &F12, C_AMBER, v.c_str());
++        agoString(n->envTime, ago, sizeof(ago));
++        label(r, FSMALL, C_DIM, ago);
++        lv_obj_set_user_data(r, (void *)(uintptr_t)n->num);
++        lv_obj_add_event_cb(
++            r,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                uint32_t num = (uint32_t)(uintptr_t)lv_obj_get_user_data((lv_obj_t *)lv_event_get_current_target(e));
++                if (num)
++                    ui->openNode(num);
++            },
++            LV_EVENT_CLICKED, this);
 +    }
 +}
 +
@@ -5344,6 +6017,83 @@ index 0000000..b85bdab
 +            ui->showToast(b);
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
++
++    // environment sensors
++    lv_obj_t *cs = card(body, "SENSORS");
++    r = settingsRow(cs, "Temperature");
++    setEnvTempDd = lv_dropdown_create(r);
++    lv_obj_set_width(setEnvTempDd, LV_PCT(100));
++    lv_dropdown_set_options(setEnvTempDd, "\xC2\xB0" "F  Fahrenheit\n" "\xC2\xB0" "C  Celsius");
++    styleDropdown(setEnvTempDd);
++    r = settingsRow(cs, "Pressure");
++    setEnvPressDd = lv_dropdown_create(r);
++    lv_obj_set_width(setEnvPressDd, LV_PCT(100));
++    lv_dropdown_set_options(setEnvPressDd, "inHg  inches of mercury\nhPa  hectopascals (mbar)");
++    styleDropdown(setEnvPressDd);
++    for (lv_obj_t *dd : {setEnvTempDd, setEnvPressDd})
++        lv_obj_add_event_cb(
++            dd,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                if (ui->settingsLoading)
++                    return;
++                ui->envUnitF = lv_dropdown_get_selected(ui->setEnvTempDd) == 0 ? 1 : 0;
++                ui->envUnitInHg = lv_dropdown_get_selected(ui->setEnvPressDd) == 0 ? 1 : 0;
++                saveEnvUnits(ui->envUnitF, ui->envUnitInHg);
++                ui->envDirty = 0xff;
++                ui->dirtyHome = ui->dirtyNodeOv = true;
++                ui->showToast(ui->envUnitF ? (ui->envUnitInHg ? "Units: \xC2\xB0" "F and inHg" : "Units: \xC2\xB0" "F and hPa")
++                                           : (ui->envUnitInHg ? "Units: \xC2\xB0" "C and inHg" : "Units: \xC2\xB0" "C and hPa"));
++            },
++            LV_EVENT_VALUE_CHANGED, this);
++    lv_obj_t *esr = plain(cs);
++    lv_obj_set_size(esr, LV_PCT(100), 30);
++    row(esr, 6);
++    lv_obj_t *esl = label(esr, &F14, C_TEXT, LV_SYMBOL_UPLOAD " Share on mesh");
++    lv_obj_set_flex_grow(esl, 1);
++    oneLine(esl);
++    setEnvShareSw = lv_switch_create(esr);
++    lv_obj_set_style_bg_color(setEnvShareSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    r = settingsRow(cs, "Share every");
++    setEnvEveryDd = lv_dropdown_create(r);
++    lv_obj_set_width(setEnvEveryDd, LV_PCT(100));
++    lv_dropdown_set_options(setEnvEveryDd, ENV_SHARE_OPTS);
++    styleDropdown(setEnvEveryDd);
++    lv_obj_t *esave = flatButton(cs, LV_SYMBOL_SAVE " Save sharing & restart", C_CYAN, LV_PCT(100), 34);
++    // two-tap confirm: saving telemetry settings restarts the radio
++    lv_obj_add_event_cb(
++        esave,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
++            if (!lv_obj_has_state(b, LV_STATE_USER_1)) {
++                lv_obj_add_state(b, LV_STATE_USER_1);
++                setButtonText(b, "Tap again to restart");
++                lv_timer_t *t = lv_timer_create(
++                    [](lv_timer_t *t) {
++                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
++                        lv_obj_remove_state(btn, LV_STATE_USER_1);
++                        setButtonText(btn, LV_SYMBOL_SAVE " Save sharing & restart");
++                    },
++                    3000, b);
++                lv_timer_set_repeat_count(t, 1);
++                return;
++            }
++            bool on = lv_obj_has_state(ui->setEnvShareSw, LV_STATE_CHECKED);
++            uint32_t sel = lv_dropdown_get_selected(ui->setEnvEveryDd);
++            uint32_t secs = ENV_SHARE_SECS[std::min<uint32_t>(sel, sizeof(ENV_SHARE_SECS) / sizeof(ENV_SHARE_SECS[0]) - 1)];
++            if (ui->cbs.setEnvSharing)
++                ui->cbs.setEnvSharing(on, secs);
++            setButtonText(b, "Restarting...");
++            ui->showToast(on ? LV_SYMBOL_UPLOAD " Sharing readings - restarting" : LV_SYMBOL_UPLOAD " Readings kept local - restarting",
++                          6000);
++        },
++        LV_EVENT_CLICKED, this);
++    setEnvNote = label(cs, FSMALL, C_DIM,
++                       "Readings always show on Home and on the web page. Sharing sends them over the mesh so other "
++                       "nodes can see them; it adds a little airtime. Saving a sharing change restarts the radio.");
++    lv_obj_set_width(setEnvNote, LV_PCT(100));
++    lv_label_set_long_mode(setEnvNote, LV_LABEL_LONG_MODE_WRAP);
 +
 +    // identity
 +    lv_obj_t *ci = card(body, "IDENTITY");
@@ -5759,6 +6509,19 @@ index 0000000..b85bdab
 +        lv_obj_add_state(setMapSw, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setMapSw, LV_STATE_CHECKED);
++    lv_dropdown_set_selected(setEnvTempDd, tempF() ? 0 : 1);
++    lv_dropdown_set_selected(setEnvPressDd, pressInHg() ? 0 : 1);
++    if (envShare)
++        lv_obj_add_state(setEnvShareSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setEnvShareSw, LV_STATE_CHECKED);
++    {
++        uint32_t secs = envShareSecs ? envShareSecs : 1800, best = 0;
++        for (uint32_t i = 0; i < sizeof(ENV_SHARE_SECS) / sizeof(ENV_SHARE_SECS[0]); i++)
++            if (ENV_SHARE_SECS[i] <= secs)
++                best = i;
++        lv_dropdown_set_selected(setEnvEveryDd, best);
++    }
 +    hoptics::TileMap::get().wake(); // reads the saved-tile index if the map has not been opened yet
 +    mapNoteTick = 0;                // refresh the "Saved:" line right away
 +    if (!hasBluetooth)
@@ -6186,6 +6949,7 @@ index 0000000..b85bdab
 +    snprintf(regionName, sizeof(regionName), "%s", regName ? regName : "--");
 +    snprintf(presetName, sizeof(presetName), "%s", usePre ? (preName ? preName : "--") : "Custom");
 +    regionKnown = true;
++    envDirty = 0xff; // units follow the region until picked in Settings
 +    if (mainScreen && lv_screen_active() == mainScreen)
 +        maybeShowWizard();
 +    if (channelNames[0][0] == 0 && usePre && preName)
@@ -6254,6 +7018,8 @@ index 0000000..b85bdab
 +// ================================================================= TICK
 +void HopticsUI::minuteSample(void)
 +{
++    minutesUp++;
++    envBucket();
 +    auto shift = [](int32_t *arr, int32_t v) {
 +        memmove(arr, arr + 1, sizeof(int32_t) * (HOPTICS_HISTORY - 1));
 +        arr[HOPTICS_HISTORY - 1] = v;
@@ -6298,6 +7064,11 @@ index 0000000..b85bdab
 +    if (!lv_obj_has_flag(nodeOv, LV_OBJ_FLAG_HIDDEN)) {
 +        if (dirtyNodeOv)
 +            refreshNodeOverlay();
++        return;
++    }
++    if (envOv && !lv_obj_has_flag(envOv, LV_OBJ_FLAG_HIDDEN)) {
++        if ((envDirty & 2) || now % 10 == 0)
++            refreshEnvOverlay();
 +        return;
 +    }
 +    if (!lv_obj_has_flag(chatOv, LV_OBJ_FLAG_HIDDEN) || !lv_obj_has_flag(setOv, LV_OBJ_FLAG_HIDDEN))
@@ -7068,8 +7839,10 @@ index 0000000..b85bdab
 +void jsonNum(std::string &o, const char *key, double v, bool comma = true)
 +{
 +    char b[48];
-+    if (std::isfinite(v))
-+        snprintf(b, sizeof(b), "%s\"%s\":%g", comma ? "," : "", key, v);
++    if (std::isfinite(v) && v == std::floor(v) && std::fabs(v) < 1e15)
++        snprintf(b, sizeof(b), "%s\"%s\":%.0f", comma ? "," : "", key, v); // whole numbers in full (timestamps!)
++    else if (std::isfinite(v))
++        snprintf(b, sizeof(b), "%s\"%s\":%.6g", comma ? "," : "", key, v);
 +    else
 +        snprintf(b, sizeof(b), "%s\"%s\":null", comma ? "," : "", key);
 +    o += b;
@@ -7079,7 +7852,7 @@ index 0000000..b85bdab
 +void HopticsUI::buildSnapshotJson(std::string &o) const
 +{
 +    o.clear();
-+    o.reserve(8192 + nodes.size() * 180);
++    o.reserve(8192 + 4800 + nodes.size() * 180);
 +    char b[64];
 +    o += "{\"v\":1,\"ui\":";
 +    jsonStr(o, HOPTICS_NAME " " HOPTICS_VERSION);
@@ -7132,7 +7905,49 @@ index 0000000..b85bdab
 +    o += ",\"ports\":{";
 +    for (int i = 0; i < 8; i++)
 +        jsonNum(o, portNames[i], portCounts[i], i > 0);
-+    o += "}},\"nodes\":[";
++    o += "}}";
++    // this radio's sensors: units picked on the screen, sharing, the last reading and the 5-minute history
++    // (history in tenths: deg C, % RH, hPa; null = no reading in that slot)
++    o += ",\"env\":{\"f\":";
++    o += tempF() ? "true" : "false";
++    o += ",\"inhg\":";
++    o += pressInHg() ? "true" : "false";
++    o += ",\"share\":";
++    o += !envCfgKnown ? "null" : envShare ? "true" : "false";
++    jsonNum(o, "every", envCfgKnown ? (double)(envShareSecs ? envShareSecs : 1800) : NAN);
++    o += ",\"now\":";
++    if (!envHasData())
++        o += "null";
++    else {
++        o += '{';
++        jsonNum(o, "t", envNow.temp, false);
++        jsonNum(o, "h", envNow.hum);
++        jsonNum(o, "p", envNow.press);
++        jsonNum(o, "lux", envNow.lux);
++        jsonNum(o, "iaq", envNow.iaq >= 0 ? envNow.iaq : NAN);
++        jsonNum(o, "at", envNowTime);
++        o += '}';
++    }
++    jsonNum(o, "step", ENV_STEP_MIN * 60);
++    static const char *envKeys[3] = {"t", "h", "p"};
++    for (int k = 0; k < 3; k++) {
++        o += ",\"";
++        o += envKeys[k];
++        o += "Hist\":[";
++        for (uint32_t i = 0; envHist && i < envHistCount; i++) {
++            int16_t v = envHist[k * HOPTICS_ENV_HISTORY + HOPTICS_ENV_HISTORY - envHistCount + i];
++            if (i)
++                o += ',';
++            if (v == ENV_NONE)
++                o += "null";
++            else {
++                snprintf(b, sizeof(b), "%d", (int)v);
++                o += b;
++            }
++        }
++        o += ']';
++    }
++    o += "},\"nodes\":[";
 +    bool first = true;
 +    for (const auto &n : nodes) {
 +        if (!first)
@@ -7159,6 +7974,16 @@ index 0000000..b85bdab
 +                o += ",\"city\":";
 +                jsonStr(o, cb);
 +            }
++        }
++        if (n.envTime) {
++            o += ",\"env\":{";
++            jsonNum(o, "t", n.envTemp, false);
++            jsonNum(o, "h", n.envHum);
++            jsonNum(o, "p", n.envPress);
++            jsonNum(o, "lux", n.envLux);
++            jsonNum(o, "iaq", n.envIaq >= 0 ? n.envIaq : NAN);
++            jsonNum(o, "at", n.envTime);
++            o += '}';
 +        }
 +        o += ",\"mqtt\":";
 +        o += n.viaMqtt ? "true" : "false";
@@ -7549,10 +8374,10 @@ index 0000000..b85bdab
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..f6700eb
+index 0000000..25dc128
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,664 @@
+@@ -0,0 +1,699 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -7911,6 +8736,18 @@ index 0000000..f6700eb
 +        uiCfg.alert_enabled = idx > 0;
 +        storeUI();
 +    };
++    cb.setEnvSharing = [this](bool share, uint32_t secs) {
++        if (!haveTelemetry) {
++            ui.showToast(LV_SYMBOL_WARNING " Radio settings not loaded yet - try again in a moment", 4000);
++            return;
++        }
++        meshtastic_ModuleConfig_TelemetryConfig t = telemetry;
++        t.environment_measurement_enabled = share;
++        t.environment_update_interval = secs;
++        telemetry = t;
++        controller->sendConfig(meshtastic_ModuleConfig_TelemetryConfig{t}, ownNode); // the radio saves and restarts
++        armRebootFallback();
++    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
 +    ui.setCallbacks(cb);
@@ -7963,6 +8800,22 @@ index 0000000..f6700eb
 +    uint8_t batt = m.has_battery_level ? (uint8_t)std::min<uint32_t>(m.battery_level, 101) : 255;
 +    ui.updateMetrics(nodeNum, batt, m.has_voltage ? m.voltage : 0, m.has_channel_utilization ? m.channel_utilization : -1,
 +                     m.has_air_util_tx ? m.air_util_tx : -1);
++}
++
++void HopticsView::updateEnvironmentMetrics(uint32_t nodeNum, const meshtastic_EnvironmentMetrics &m)
++{
++    HopticsUI::EnvReading r;
++    if (m.has_temperature)
++        r.temp = m.temperature;
++    if (m.has_relative_humidity)
++        r.hum = m.relative_humidity;
++    if (m.has_barometric_pressure)
++        r.press = m.barometric_pressure;
++    if (m.has_lux)
++        r.lux = m.lux;
++    if (m.has_iaq)
++        r.iaq = m.iaq;
++    ui.updateEnvironment(nodeNum ? nodeNum : ownNode, r); // local readings may come without a sender
 +}
 +
 +void HopticsView::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float snr)
@@ -8064,6 +8917,13 @@ index 0000000..f6700eb
 +void HopticsView::updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg)
 +{
 +    mqttEnabled = cfg.enabled;
++}
++
++void HopticsView::updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg)
++{
++    telemetry = cfg;
++    haveTelemetry = true;
++    ui.setEnvConfig(cfg.environment_measurement_enabled, cfg.environment_update_interval, cfg.environment_display_fahrenheit);
 +}
 +
 +void HopticsView::updateExtNotificationModule(const meshtastic_ModuleConfig_ExternalNotificationConfig &cfg)
