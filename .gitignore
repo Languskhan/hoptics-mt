@@ -1,0 +1,8 @@
+harness/shots/
+harness/*.o
+harness/harness
+harness/stress
+*.ppm
+cities*.zip
+__pycache__/
+*.pyc
