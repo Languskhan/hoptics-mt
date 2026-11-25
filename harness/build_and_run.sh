@@ -18,16 +18,19 @@ T=${HARNESS_TMP:-/tmp}
 [ -d "$T/tilesrc" ] || python3 make_test_tiles.py "$T/tilesrc" 38.695 -121.265 8 17 2
 for f in adler32 crc32 infback inffast inflate inftrees zutil; do gcc -c -O2 $DEFS $INC $P/$f.c -o z_$f.o; done
 g++ -std=c++20 -O1 $DEFS $INC -c $P/PNGdec.cpp -o PNGdec.o
-g++ -std=c++20 -O1 $DEFS $INC -c $D/source/graphics/TFT/HopticsUI.cpp -o HopticsUI.o
-g++ -std=c++20 -O1 $DEFS $INC -c $D/source/graphics/TFT/HopticsTiles.cpp -o HopticsTiles.o
-g++ -std=c++20 -O1 $DEFS $INC -c $D/source/graphics/TFT/HopticsReport.cpp -o HopticsReport.o
 for S in $SIZES; do
-    # each panel size links the fonts generated for it, like the firmware does (VIEW_240x320 / VIEW_320x240)
+    # each panel size links the fonts generated for it, like the firmware does (VIEW_240x320 / VIEW_320x240),
+    # and landscape stands in for the T-Deck Plus (board facts in HopticsBoard.h: no sensor slots, GPS)
     G=$D/generated/ui_$S
+    BOARD=""
+    [ "$S" = 320x240 ] && BOARD="-DT_DECK -DT_DECK_PLUS"
+    for m in HopticsUI HopticsTiles HopticsReport; do
+        g++ -std=c++20 -O1 $DEFS $BOARD $INC -c $D/source/graphics/TFT/$m.cpp -o ${m}_$S.o
+    done
     for f in 12 14 16 20; do gcc -c -O1 $DEFS $INC -I$G $G/ui_font_montserrat_$f.c -o font${f}_$S.o; done
     BIN=harness; OUT=shots
     [ "$S" != 240x320 ] && BIN=harness_$S && OUT=shots_$S
-    g++ -std=c++20 -O1 $DEFS $INC harness.cpp HopticsUI.o HopticsTiles.o HopticsReport.o PNGdec.o z_*.o font*_$S.o \
+    g++ -std=c++20 -O1 $DEFS $INC harness.cpp HopticsUI_$S.o HopticsTiles_$S.o HopticsReport_$S.o PNGdec.o z_*.o font*_$S.o \
         $L/../lvgl-build/liblvgl.a -lm -lpthread -o $BIN
     mkdir -p $OUT
     ./$BIN $S $OUT
