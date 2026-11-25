@@ -371,17 +371,24 @@ int main(int argc, char **argv)
     printf("snapshot %zu bytes\n", js.size());
 
     const char *tn[4] = {"midnight", "daylight", "nightred", "amber"};
-    for (int t = 1; t < 4; t++) {
+    // every theme, the same five screens: the website's theme comparison uses these
+    for (int t = 0; t < 4; t++) {
         ui.setTheme(t);
         ui.selectTab(HopticsUI::T_HOME);
         pump(100);
         shot((std::string("20_home_") + tn[t]).c_str());
+        ui.selectTab(HopticsUI::T_LIVE);
+        pump(50);
+        shot((std::string("25_live_") + tn[t]).c_str());
         ui.selectTab(HopticsUI::T_STATS);
+        lv_obj_scroll_to_y(ui.pages[HopticsUI::T_STATS], 0, LV_ANIM_OFF);
+        pump(20);
         shot((std::string("21_stats_") + tn[t]).c_str());
         ui.selectTab(HopticsUI::T_MAP);
         pump(50);
         shot((std::string("22_map_") + tn[t]).c_str());
         ui.openChat(1);
+        lv_textarea_set_text(ui.chatInput, "");
         pump(50);
         shot((std::string("23_chat_") + tn[t]).c_str());
         ui.closeChat();
