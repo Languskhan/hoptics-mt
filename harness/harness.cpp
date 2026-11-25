@@ -327,10 +327,17 @@ int main(int argc, char **argv)
     ui.closeEnv();
     ui.openSettings();
     pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setEnvCorrNote, LV_ANIM_OFF);
+    lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -40, LV_ANIM_OFF);
+    ui.stepEnvCorr(-1);
+    ui.stepEnvCorr(-1);
+    ui.stepEnvCorr(-1);
+    pump(20);
+    shot("53_settings_sensors");
     lv_obj_scroll_to_view_recursive(ui.setEnvEveryDd, LV_ANIM_OFF);
     lv_obj_scroll_by(lv_obj_get_child(ui.setOv, 1), 0, -60, LV_ANIM_OFF);
     pump(20);
-    shot("53_settings_sensors");
+    shot("53b_settings_sharing");
     ui.closeSettings();
     {
         HopticsUI::EnvReading saved = ui.envNow;
