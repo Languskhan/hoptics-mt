@@ -59,14 +59,14 @@
 <main>
 
 <header>
-  <div class="kicker">Hoptics MT · test build</div>
+  <div class="kicker">Hoptics MT · v0.3.0</div>
   <h1>Install &amp; test guide</h1>
-  <p>Hoptics MT is a touch-screen version of Meshtastic. Thanks for trying it out! Installing takes a few minutes, all from a web browser.</p>
+  <p>Hoptics MT is a new screen for Meshtastic. Thanks for trying it out! Installing takes a few minutes, all from a web browser.</p>
 </header>
 
 <div class="note"><b>Check first:</b>
   <ul style="margin:6px 0 0">
-    <li>Hoptics MT runs on two kits with the color touch screen: the <b>Heltec V4 Expansion Kit</b> and the <b>Heltec V4-R8 Expansion Kit V2</b>. They need different files (below). On a bare board or one with the small OLED screen, the display won't work.</li>
+    <li>Hoptics MT runs on two Heltec kits with the color touch screen, the <b>Heltec V4 Expansion Kit</b> and the <b>Heltec V4-R8 Expansion Kit V2</b>, and (beta, new in v0.3.0) on the <b>LilyGO T-Deck Plus</b> and the <b>Elecrow ThinkNode M9</b>. Each needs its own files (below). On a bare Heltec board or one with the small OLED screen, the display won't work.</li>
     <li>You need a <b>computer with Chrome or Edge</b>. Phones, Safari and Firefox can't flash firmware.</li>
     <li>Use a <b>USB-C cable that carries data</b>. Some cables only charge.</li>
   </ul>
@@ -75,7 +75,7 @@
 <h2><span class="n">1</span>Easiest: the one-click installer</h2>
 <ol class="steps">
   <li>Plug the kit into the computer and open <span class="chip" data-copy="https://languskhan.github.io/hoptics-mt/">languskhan.github.io/hoptics-mt</span> in Chrome or Edge.</li>
-  <li>Click the button for <b>your</b> kit (<span class="ui">Install for V4 kit</span> or <span class="ui">Install for V4-R8 kit</span>) and pick the kit's port when Chrome asks. It's often listed as <i>USB JTAG/serial debug unit</i>.</li>
+  <li>Pick <b>your</b> radio in the list, click <span class="ui">Connect and install</span> and pick its port when Chrome asks. It's often listed as <i>USB JTAG/serial debug unit</i> (the M9 shows as a <i>USB-SERIAL CH340</i> COM port).</li>
   <li>Click <span class="ui">Install</span>. When it asks about erasing:
     <ul>
       <li><b>First time on Hoptics</b> (coming from regular Meshtastic, MeshCore or other firmware, or a new board): tick <b>Erase</b>. You'll set the region again in the setup wizard.</li>
@@ -84,6 +84,7 @@
   </li>
   <li>Wait about a minute until it says it's done. The files come from the latest release, so there's nothing to download.</li>
 </ol>
+<div class="tip"><b>T-Deck Plus:</b> if the screen stays dark after installing, slide the power switch off and on.<br><b>ThinkNode M9:</b> its first start updates the LoRa chip (about 10 seconds); keep it plugged in. It has no touch screen: the arrows move the highlight, the center key presses, Back goes back.</div>
 <div class="small">If that page doesn't work for you, use one of the two ways below instead. They do the same thing with files you download yourself.</div>
 
 <h3>Which files to download (other ways)</h3>
@@ -96,7 +97,13 @@
   <tr><td colspan="2"><b>Heltec V4-R8 Expansion Kit V2</b></td></tr>
   <tr><td><code class="fn">hoptics-mt-heltec-v4-r8-expansion-kit-v2-…update.bin</code></td><td>Way A</td></tr>
   <tr><td><code class="fn">hoptics-mt-heltec-v4-r8-expansion-kit-v2-…factory.bin</code></td><td>Way B, address <code>0x0</code></td></tr>
-  <tr><td colspan="2"><b>Both kits</b></td></tr>
+  <tr><td colspan="2"><b>LilyGO T-Deck Plus</b> (beta)</td></tr>
+  <tr><td><code class="fn">hoptics-mt-lilygo-t-deck-plus-mt-…update.bin</code></td><td>Way A</td></tr>
+  <tr><td><code class="fn">hoptics-mt-lilygo-t-deck-plus-mt-…factory.bin</code></td><td>Way B, address <code>0x0</code></td></tr>
+  <tr><td colspan="2"><b>Elecrow ThinkNode M9</b> (beta)</td></tr>
+  <tr><td><code class="fn">hoptics-mt-elecrow-thinknode-m9-mt-…update.bin</code></td><td>Way A</td></tr>
+  <tr><td><code class="fn">hoptics-mt-elecrow-thinknode-m9-mt-…factory.bin</code></td><td>Way B, address <code>0x0</code></td></tr>
+  <tr><td colspan="2"><b>All of them</b></td></tr>
   <tr><td><code class="fn">mt-esp32s3-ota.bin</code></td><td>Way B, address <code>0x650000</code></td></tr>
 </table>
 <p class="small">You don't need the <code>.elf</code> files; they're for decoding crash reports.</p>
@@ -115,12 +122,12 @@
   </div>
 </div>
 
-<div class="tip"><b>If the browser can&#39;t connect to the kit</b> in either way, put it in boot mode: hold the <b>USER (PRG)</b> button, tap <b>RST</b>, then let go of USER. Then try connecting again. Once flashing finishes, tap <b>RST</b> to start it normally.</div>
+<div class="tip"><b>If the browser can&#39;t connect to the kit</b> in either way, put it in boot mode: hold the <b>USER (PRG)</b> button, tap <b>RST</b>, then let go of USER. Then try connecting again. Once flashing finishes, tap <b>RST</b> to start it normally. (T-Deck Plus: hold the trackball down while sliding the power switch on; afterwards switch it off and on. ThinkNode M9: it normally connects without this.)</div>
 
 <h3>Way A: Meshtastic Web Flasher (keeps your settings)</h3>
 <ol class="steps">
   <li>Plug the kit into the computer and open <span class="chip" data-copy="https://flasher.meshtastic.org">flasher.meshtastic.org</span> in Chrome or Edge.</li>
-  <li>Under <span class="ui">Select Target Device</span>, pick <b>Heltec V4</b> or <b>Heltec V4 R8</b>, or let it auto-detect.</li>
+  <li>Under <span class="ui">Select Target Device</span>, pick <b>Heltec V4</b>, <b>Heltec V4 R8</b>, <b>T-Deck</b> or <b>ThinkNode M9</b>, or let it auto-detect.</li>
   <li>Click the small <b>folder icon</b> next to <span class="ui">Select Firmware</span>. Choose the <code>.update.bin</code> for your kit.</li>
   <li>Click <span class="ui">Flash</span>. Leave <span class="ui">Full Erase and Install</span> off; it may already be greyed out, which is fine. Click <span class="ui">Update</span>, then pick the kit's port when Chrome asks.</li>
   <li>Wait for it to finish. If the screen doesn't restart on its own, tap <b>RST</b>.</li>

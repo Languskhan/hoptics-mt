@@ -49,20 +49,17 @@ jobs:
           - board: heltec-v4-r8-expansion-kit-v2 # V4-R8 + Expansion Kit V2 (8 MB PSRAM)
             env: heltec-v4-r8-tft
             flags: "-DHOPTICS_HISTORY=120 -DHOPTICS_SIGNAL_HISTORY=120 -DHOPTICS_NODE_ROWS=80 -DHOPTICS_MAX_NODES=500"
-          # In progress: built on every run so they can be tested, but `untested` keeps them out of releases
-          # (and so off the website) until they have been checked on the hardware. Remove it then, and set the
-          # board's "status" to "available" in site/nodes.json.
-          # ("-mt" in the ids: site/nodes.json also lists a future MeshCore build for the T-Deck Plus.)
+          # A board still in progress gets `untested: true`: built on every run, but kept out of releases (and so
+          # off the website) until checked on the hardware; its site/nodes.json "status" stays "soon" until then.
+          # ("-mt" in the ids: site/nodes.json also lists MeshCore builds for the T-Deck Plus and the M9.)
           - board: lilygo-t-deck-plus-mt # keyboard, trackball, touch, GPS, 320x240 landscape (8 MB PSRAM)
             env: t-deck-plus-tft
             flags: "-DHOPTICS_HISTORY=120 -DHOPTICS_SIGNAL_HISTORY=120 -DHOPTICS_NODE_ROWS=80 -DHOPTICS_MAX_NODES=500"
             landscape: true
-            untested: true
           - board: elecrow-thinknode-m9-mt # keyboard (no touch), LR1110, GPS, 320x240 landscape (8 MB PSRAM)
             env: thinknode_m9-tft
             flags: "-DHOPTICS_HISTORY=120 -DHOPTICS_SIGNAL_HISTORY=120 -DHOPTICS_NODE_ROWS=80 -DHOPTICS_MAX_NODES=500"
             landscape: true
-            untested: true
     steps:
       - uses: actions/checkout@v4
 

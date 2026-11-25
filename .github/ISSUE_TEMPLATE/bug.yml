@@ -23,8 +23,8 @@ body:
       options:
         - Heltec V4 Expansion Kit (original)
         - Heltec V4-R8 Expansion Kit V2
-        - LilyGO T-Deck Plus (test build)
-        - Elecrow ThinkNode M9 (test build)
+        - LilyGO T-Deck Plus
+        - Elecrow ThinkNode M9
         - Not sure
   - type: dropdown
     id: often

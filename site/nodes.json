@@ -24,20 +24,20 @@
     {
       "id": "lilygo-t-deck-plus-mt",
       "name": "LilyGO T-Deck Plus",
-      "detail": "Keyboard handheld with trackball, touch screen and GPS. In testing.",
+      "detail": "Keyboard handheld with trackball, touch screen and GPS. If the screen stays dark after installing, slide the power switch off and on.",
       "firmware": "Hoptics MT",
       "platform": "meshtastic",
-      "status": "soon",
+      "status": "available",
       "beta": true,
       "flash": "esp"
     },
     {
       "id": "elecrow-thinknode-m9-mt",
       "name": "Elecrow ThinkNode M9",
-      "detail": "Keyboard handheld with a 2.4\" screen and GPS. In testing.",
+      "detail": "Keyboard handheld with a 2.4\" screen and GPS, run entirely from its keys. Its first start updates the LoRa chip: keep it plugged in for a minute.",
       "firmware": "Hoptics MT",
       "platform": "meshtastic",
-      "status": "soon",
+      "status": "available",
       "beta": true,
       "flash": "esp"
     },
