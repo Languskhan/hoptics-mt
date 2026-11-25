@@ -4,6 +4,7 @@
 #include "graphics/view/TFT/HopticsUI.h"
 #undef private
 #include "graphics/view/TFT/HopticsReport.h"
+#include "graphics/view/TFT/HopticsReach.h"
 #include "lvgl.h"
 #include <cmath>
 #include <cstdio>
@@ -222,6 +223,19 @@ int main(int argc, char **argv)
     ui.addMessage(0, 0x11aa2202, now - 3000, "anyone near the lake?", 0, 7, true);
     ui.addMessage(0x11aa2204, 0x11aa2204, now - 200, "Want to test range from the overlook tomorrow?", 0, 7, true);
     ui.addMessage(0x11aa2204, me, now - 120, "Yes! I'll bring the V4 kit", 12, 2, true);
+    // reach check: MQTT gateways uploaded our channel message (id 11); the DM (id 12) got no copies back
+    hoptics::Reach::get().track(11, 1, now - 1300, "Hoptics checking in from home base \xF0\x9F\x91\x8B");
+    hoptics::Reach::get().track(12, 0x11aa2204, now - 120, "Yes! I'll bring the V4 kit");
+    {
+        struct { const char *gw; uint8_t start, limit; } echoes[] = {
+            {"!11aa2201", 3, 3}, {"!11aa2205", 3, 3}, {"!11aa2202", 3, 2}, {"!7c3a91f2", 3, 2}, {"!0be1d004", 3, 2},
+            {"!11aa2203", 3, 1}, {"!5a7720c1", 3, 1}, {"!9e02aa11", 3, 1}, {"!44c1b2e0", 3, 1}, {"!11aa2208", 3, 0},
+            {"!c0ffee01", 3, 0}, {"!3b8d0a77", 0, 0}, {"!11aa2201", 3, 2}, // the last one: same gateway again, counted once
+        };
+        for (auto &e : echoes)
+            hoptics_mqtt_echo(11, e.gw, e.start, e.limit, false);
+        hoptics_mqtt_echo(11, "!11aa2200", 3, 3, true); // this radio uploaded it too
+    }
     ui.tick(now);
 
     ui.selectTab(HopticsUI::T_HOME);
@@ -434,6 +448,49 @@ int main(int argc, char **argv)
     lv_obj_scroll_to_view_recursive(ui.setPsk, LV_ANIM_OFF); lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setPsk))), 0, -90, LV_ANIM_OFF);
     pump(20);
     shot("44_settings_wifi");
+    // MQTT + reach check: connected to a regional server, uploads allowed, but not listening on the channel yet
+    ui.setMqttConfig(true, "mqtt.bayme.sh", "meshdev", true, "msh/US/bayarea");
+    ui.setOkToMqtt(true);
+    ui.setDownlink(false);
+    ui.openSettings();
+    pump(20);
+    lv_obj_scroll_to_view_recursive(ui.setMqttCheck[0], LV_ANIM_OFF);
+    lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(ui.setMqttCheck[0])), 0, -86, LV_ANIM_OFF);
+    pump(20);
+    shot("56_settings_mqtt");
+    lv_obj_scroll_to_view_recursive(ui.setMqttRoot, LV_ANIM_OFF);
+    pump(20);
+    shot("56b_settings_mqtt_fields");
+    lv_obj_scroll_to_view_recursive(ui.setDownSw, LV_ANIM_OFF);
+    lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setDownSw))), 0, -230, LV_ANIM_OFF);
+    pump(20);
+    shot("56c_settings_mqtt_setup");
+    ui.setDownlink(true);
+    ui.closeSettings();
+    ui.openChat(1);
+    pump(50);
+    shot("57_chat_reach");
+    ui.openReach(11);
+    pump(50);
+    shot("58_reach");
+    lv_obj_scroll_by(lv_obj_get_child(ui.reachOv, 1), 0, -200, LV_ANIM_OFF);
+    pump(20);
+    shot("58b_reach_gateways");
+    ui.closeReach();
+    ui.closeChat();
+    ui.openChat(0x11aa2204);
+    ui.openReach(12);
+    pump(50);
+    shot("58c_reach_none");
+    ui.closeReach();
+    ui.closeChat();
+    {
+        std::string js;
+        ui.buildSnapshotJson(js);
+        FILE *jf = fopen("shots/snapshot_reach.json", "w");
+        fwrite(js.data(), 1, js.size(), jf);
+        fclose(jf);
+    }
     lv_obj_scroll_to_view_recursive(ui.setMapSw, LV_ANIM_OFF);
     pump(20);
     shot("45_settings_map");

@@ -45,7 +45,17 @@ is upstream Meshtastic 2.8.3, unchanged.
   watch where traffic comes from. RF pings are coloured by packet type, MQTT pings are violet, and a
   direct packet flashes a beam to you. Tap a dot for that node.
 - **Chat**: channels and direct messages, bubbles with delivery ticks, on-screen keyboard, and pop-ups
-  for new messages.
+  for new messages. With MQTT set up, your own messages also show their **reach** (below).
+- **Reach check** (how far did my message get?): when the radio is on Wi-Fi and receiving your MQTT
+  server's traffic, every gateway that hears one of your messages and uploads it sends a copy back.
+  Hoptics counts those copies: your message bubble shows `12 gw - 3 hops`, and tapping it shows how
+  many gateways heard it **directly, 1 hop, 2 hops...** out. It's deliberately light: only messages
+  sent from this screen are tracked, and the check costs one compare per MQTT packet. The **V4** keeps
+  counts for its last 6 messages; the **V4-R8** (and the T-Deck Plus and ThinkNode M9 builds) keep the
+  last 24 and also list **which gateways** heard each one. The web page has the full **Reach logger**.
+- **Settings > MQTT**: set up MQTT on the radio itself, no phone app: server, username, password, root
+  topic, and the two switches the reach check needs, with a live checklist that turns green as each
+  part works and step-by-step directions underneath (see [Setting up MQTT](#setting-up-mqtt-and-the-reach-check)).
 - **Nodes**: sort by recent, signal, hops or name. Node detail shows sensor readings (if the node shares
   them), signal, battery, channel use, position, distance, an SNR history graph, and buttons for **DM**,
   **Trace route** and **Request position**.
@@ -65,6 +75,13 @@ is upstream Meshtastic 2.8.3, unchanged.
 in the same style: tiles, **environment readings and 24-hour sensor graphs** (with a °F/°C switch),
 sensors shared by other nodes, live map with pings, traffic feed with the MQTT filter, charts, sortable
 node table, and day/night toggle (`/hoptics?day` to bookmark day mode). It's read-only.
+The **Reach logger** card lists your messages with their gateway count, a hops histogram and how far out
+they got; click one for the breakdown and (V4-R8) the gateways by hops. It keeps a longer history in your
+browser than the radio does (up to 300 messages per radio) and exports it as CSV.
+
+| Message reach | Reach detail | Settings > MQTT | MQTT setup steps |
+|---|---|---|---|
+| ![reach on a bubble](docs/screenshots/57_chat_reach.png) | ![reach](docs/screenshots/58_reach.png) | ![mqtt](docs/screenshots/56_settings_mqtt.png) | ![steps](docs/screenshots/56c_settings_mqtt_setup.png) |
 
 | Home | Environment | Node with sensors | Settings > SENSORS |
 |---|---|---|---|
@@ -75,6 +92,26 @@ node table, and day/night toggle (`/hoptics?day` to bookmark day mode). It's rea
 **Discord and loggers**: `tools/hoptics_bridge.py` runs on any PC or Pi on the same Wi-Fi. It posts new
 nodes and (optionally) channel chat to a Discord webhook, and/or writes JSON-lines logs for Grafana,
 InfluxDB or a spreadsheet. See [Discord / logging](#discord--logging).
+
+## Setting up MQTT and the reach check
+
+Everything is on the radio in **Settings > MQTT** (the same settings the Meshtastic app has, if you prefer
+that):
+
+1. **Wi-Fi on** (Settings > Wi-Fi). MQTT needs the internet.
+2. **Server, username, password, root topic**: ask your local mesh group. Regional servers carry your
+   area's traffic (for example the Bay Area mesh uses its own server and the root `msh/US/bayarea`).
+   Leave the server, username and password blank to use the public Meshtastic server (root `msh/US`).
+3. **Others may upload my messages** on. This is Meshtastic's *OK to MQTT*. Gateways connected to public
+   servers drop messages from radios that don't allow it, so without it nobody uploads you.
+4. **Receive MQTT on the primary channel** on. This is the channel's *downlink*: it's how the copies of
+   your messages come back to the radio. Your radio does **not** need to upload (uplink) itself.
+5. **Save & restart**. The checklist at the top of the card turns green as each part works. Then send a
+   channel message and watch your bubble.
+
+Traffic that arrives over MQTT shows on screen (Live > MQTT only, violet) but Hoptics never re-sends it
+over LoRa, whatever the server. The password is never shown on the screen or the web page; leave it blank
+to keep the saved one.
 
 ## Install (easiest)
 

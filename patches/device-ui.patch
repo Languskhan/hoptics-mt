@@ -232,6 +232,102 @@ index 0000000..49fcdc5
 +    "-----END CERTIFICATE-----\n"
 +    ;
 +// clang-format on
+diff --git a/include/graphics/view/TFT/HopticsReach.h b/include/graphics/view/TFT/HopticsReach.h
+new file mode 100644
+index 0000000..0728298
+--- /dev/null
++++ b/include/graphics/view/TFT/HopticsReach.h
+@@ -0,0 +1,90 @@
++#pragma once
++// Hoptics MT "reach check": how far did my message get?
++//
++// When this radio is subscribed to an MQTT broker (channel downlink on), every gateway that hears one of our
++// messages and uploads it sends a copy back to us. Stock Meshtastic looks at those copies and drops them;
++// Hoptics counts them first: one per gateway, grouped by how many hops the message had travelled when that
++// gateway heard it. Only the text messages sent from this screen are tracked, so the cost is a compare per
++// MQTT packet and a few hundred bytes.
++//
++// Big boards (HOPTICS_MAX_NODES >= 500: V4-R8, T-Deck Plus, ThinkNode M9) also keep and show which
++// gateways heard each message. The original V4 keeps the counts only.
++#include <atomic>
++#include <cstddef>
++#include <cstdint>
++#include <functional>
++#include <mutex>
++
++#ifndef HOPTICS_REACH_FULL
++#if defined(HOPTICS_MAX_NODES) && HOPTICS_MAX_NODES >= 500
++#define HOPTICS_REACH_FULL 1
++#else
++#define HOPTICS_REACH_FULL 0
++#endif
++#endif
++
++#ifndef HOPTICS_REACH_MSGS // messages remembered
++#define HOPTICS_REACH_MSGS (HOPTICS_REACH_FULL ? 24 : 6)
++#endif
++#ifndef HOPTICS_REACH_GW // gateways remembered per message (also used to count each gateway once)
++#define HOPTICS_REACH_GW (HOPTICS_REACH_FULL ? 96 : 24)
++#endif
++
++namespace hoptics
++{
++
++constexpr int kReachHops = 8; // hop buckets 0..7 (Meshtastic's maximum hop limit is 7)
++
++struct ReachMsg {
++    uint32_t id = 0;       // packet id of the message we sent
++    uint32_t convKey = 0;  // conversation: channel index, or the node number of a DM
++    uint32_t sent = 0;     // unix time
++    uint32_t lastEcho = 0; // unix time of the latest gateway copy
++    uint16_t gateways = 0; // distinct gateways (not counting this radio) that uploaded it
++    uint8_t byHop[kReachHops] = {};
++    uint8_t unknownHops = 0; // gateways on old firmware that don't say how many hops
++    bool self = false;       // this radio uploaded it too (uplink on)
++    uint8_t nGw = 0;         // entries in gw[] (may stop at HOPTICS_REACH_GW; gateways keeps counting)
++    uint32_t gw[HOPTICS_REACH_GW];
++    uint8_t gwHop[HOPTICS_REACH_GW]; // 0xFF = unknown
++    char text[48] = {};
++
++    int maxHop(void) const
++    {
++        for (int h = kReachHops - 1; h >= 0; h--)
++            if (byHop[h])
++                return h;
++        return -1;
++    }
++};
++
++class Reach
++{
++  public:
++    static Reach &get(void);
++
++    /// a text message we just sent (UI task)
++    void track(uint32_t id, uint32_t convKey, uint32_t when, const char *text);
++    /// a copy of one of our packets came back from the broker (firmware MQTT task). hops < 0: unknown
++    bool echo(uint32_t id, uint32_t gateway, int hops, bool self, uint32_t when);
++
++    /// changes every time something is recorded, so readers can skip work when nothing happened
++    uint32_t version(void) const { return ver.load(); }
++    /// newest first, read in place under the lock (keep the callback short)
++    void forEach(const std::function<void(const ReachMsg &)> &fn) const;
++    bool find(uint32_t id, ReachMsg &out) const;
++    void clear(void);
++
++  private:
++    Reach(void);
++    mutable std::mutex mtx;
++    ReachMsg *ring = nullptr; // in PSRAM where there is some: ~13 KB on the big boards
++    uint32_t head = 0, count = 0;
++    std::atomic<uint32_t> ver{0};
++};
++
++} // namespace hoptics
++
++/// Called by the firmware's MQTT downlink (patched src/mqtt/MQTT.cpp) for every copy of a packet we sent.
++/// gatewayId is the uploader's "!xxxxxxxx" id.
++void hoptics_mqtt_echo(uint32_t packetId, const char *gatewayId, uint8_t hopStart, uint8_t hopLimit, bool self);
 diff --git a/include/graphics/view/TFT/HopticsReport.h b/include/graphics/view/TFT/HopticsReport.h
 new file mode 100644
 index 0000000..3ee18db
@@ -544,10 +640,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..7540c29
+index 0000000..2dc6820
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,591 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -736,6 +832,11 @@ index 0000000..7540c29
 +        std::function<void(bool on)> setWebChat;
 +        // environment sensors: share = send readings to the mesh every intervalSecs (the radio restarts)
 +        std::function<void(bool share, uint32_t intervalSecs)> setEnvSharing;
++        // MQTT module + "OK to MQTT" (LoRa config) + downlink on the primary channel. pass nullptr keeps the saved one.
++        // Only the parts that changed are sent; the radio restarts to apply them.
++        std::function<void(bool enabled, const char *server, const char *user, const char *pass, const char *root,
++                           bool okToMqtt, bool downlink)>
++            setMqtt;
 +    };
 +
 +    enum Theme { TH_MIDNIGHT = 0, TH_DAYLIGHT, TH_NIGHT_RED, TH_AMBER, TH_COUNT };
@@ -774,6 +875,13 @@ index 0000000..7540c29
 +    void setDeviceRole(int role);
 +    void setBluetoothEnabled(bool on, uint32_t fixedPin = 0);
 +    void setWifiConfig(const char *ssid, bool hasPassword);
++    // MQTT settings as the radio has them (server "" = the public Meshtastic server)
++    void setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root);
++    void setOkToMqtt(bool on);
++    void setDownlink(bool on); // primary channel downlink
++    // reach check (HopticsReach.h): one of our messages, opened from its chat bubble
++    void openReach(uint32_t requestId);
++    void closeReach(void);
 +    void setLnaMode(int mode); // FEM_LNA_Mode: 0 off, 1 on, 2 not present, 3 auto
 +    // message sounds offered in Settings (picked from device-ui's Meshtastic tone library)
 +    static constexpr int kToneCount = 8;
@@ -840,6 +948,10 @@ index 0000000..7540c29
 +    void replayCharts(void);
 +    void buildChatOverlay(void);
 +    void buildNodeOverlay(void);
++    void buildReachOverlay(void);
++    void refreshReach(void);
++    void refreshBubbleReach(void);
++    void refreshMqttChecklist(void);
 +    void buildSettingsOverlay(void);
 +    void buildKeyboard(void);
 +    void buildWizard(void);
@@ -995,6 +1107,14 @@ index 0000000..7540c29
 +    lv_obj_t *setWifiSw = nullptr, *setSsid = nullptr, *setPsk = nullptr, *setLnaDd = nullptr, *setLnaRow = nullptr;
 +    char wifiSsid[33] = {0};
 +    bool wifiHasPsk = false;
++    // MQTT / reach check
++    lv_obj_t *setMqttSw = nullptr, *setMqttServer = nullptr, *setMqttUser = nullptr, *setMqttPass = nullptr,
++             *setMqttRoot = nullptr, *setOkMqttSw = nullptr, *setDownSw = nullptr, *setMqttCheck[4] = {};
++    bool mqttEnabled = false, mqttHasPass = false, okToMqtt = false, downlinkOn = false;
++    char mqttServer[65] = {0}, mqttUser[65] = {0}, mqttRoot[33] = {0};
++    lv_obj_t *reachOv = nullptr, *reachOvTitle = nullptr, *reachText = nullptr, *reachSum = nullptr, *reachSub = nullptr,
++             *reachBars = nullptr, *reachGw = nullptr, *reachHelp = nullptr;
++    uint32_t reachId = 0, reachSeen = 0;
 +    int lnaMode = 2; // not present until the radio says otherwise
 +    lv_obj_t *mainScreen = nullptr;
 +    lv_obj_t *statusTime = nullptr, *statusName = nullptr, *statusBatt = nullptr, *statusMsg = nullptr, *statusLink = nullptr,
@@ -1070,6 +1190,7 @@ index 0000000..7540c29
 +    struct BubbleRef {
 +        uint32_t requestId;
 +        lv_obj_t *status;
++        lv_obj_t *reach; // "12 gw - 3 hops" once MQTT copies come back
 +    };
 +    std::vector<BubbleRef> bubbleRefs;
 +
@@ -1116,10 +1237,10 @@ index 0000000..7540c29
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..997a864
+index 0000000..edeaf84
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,103 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1209,6 +1330,10 @@ index 0000000..997a864
 +    uint32_t nodeCountSeen = 0;
 +    time_t lastTick = 0, lastSnapshot = 0, lastConnPoll = 0;
 +    bool mqttEnabled = false;
++    meshtastic_ModuleConfig_MQTTConfig mqtt = meshtastic_ModuleConfig_MQTTConfig_init_zero;
++    bool haveMqtt = false;
++    meshtastic_Channel channel0 = meshtastic_Channel_init_zero; // primary channel, for its downlink switch
++    bool haveChannel0 = false;
 +    meshtastic_ModuleConfig_ExternalNotificationConfig extNotif{};
 +    bool haveExtNotif = false;
 +    meshtastic_ModuleConfig_TelemetryConfig telemetry{};
@@ -1324,6 +1449,140 @@ index 5ddff3f..b4aa7e3 100644
 +
 +    std::unique_ptr<PacketType, Release> data;
  };
+diff --git a/source/graphics/TFT/HopticsReach.cpp b/source/graphics/TFT/HopticsReach.cpp
+new file mode 100644
+index 0000000..7781d60
+--- /dev/null
++++ b/source/graphics/TFT/HopticsReach.cpp
+@@ -0,0 +1,128 @@
++#include "graphics/view/TFT/HopticsReach.h"
++#if defined(ARDUINO_ARCH_ESP32)
++#include "esp_heap_caps.h"
++#endif
++#include <cstdlib>
++#include <new>
++#include <cstring>
++#include <ctime>
++
++namespace hoptics
++{
++
++Reach &Reach::get(void)
++{
++    static Reach r;
++    return r;
++}
++
++Reach::Reach(void)
++{
++    void *mem = nullptr;
++#if defined(ARDUINO_ARCH_ESP32)
++    mem = heap_caps_malloc(sizeof(ReachMsg) * HOPTICS_REACH_MSGS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++#endif
++    if (!mem)
++        mem = malloc(sizeof(ReachMsg) * HOPTICS_REACH_MSGS);
++    if (mem)
++        ring = new (mem) ReachMsg[HOPTICS_REACH_MSGS];
++}
++
++void Reach::track(uint32_t id, uint32_t convKey, uint32_t when, const char *text)
++{
++    if (!id || !ring)
++        return;
++    std::lock_guard<std::mutex> lk(mtx);
++    ReachMsg &m = ring[head];
++    m = ReachMsg{};
++    m.id = id;
++    m.convKey = convKey;
++    m.sent = when;
++    if (text) {
++        strncpy(m.text, text, sizeof(m.text) - 1);
++        m.text[sizeof(m.text) - 1] = 0;
++    }
++    head = (head + 1) % HOPTICS_REACH_MSGS;
++    if (count < HOPTICS_REACH_MSGS)
++        count++;
++    ver++;
++}
++
++bool Reach::echo(uint32_t id, uint32_t gateway, int hops, bool self, uint32_t when)
++{
++    std::lock_guard<std::mutex> lk(mtx);
++    for (uint32_t i = 0; i < count; i++) {
++        ReachMsg &m = ring[(head + HOPTICS_REACH_MSGS - 1 - i) % HOPTICS_REACH_MSGS];
++        if (m.id != id)
++            continue;
++        if (self) {
++            if (m.self)
++                return true;
++            m.self = true;
++        } else {
++            for (uint8_t k = 0; k < m.nGw; k++)
++                if (m.gw[k] == gateway)
++                    return true; // the same gateway uploading a retransmission: count it once
++            if (m.nGw < HOPTICS_REACH_GW) {
++                m.gw[m.nGw] = gateway;
++                m.gwHop[m.nGw] = hops < 0 ? 0xFF : (uint8_t)hops;
++                m.nGw++;
++            }
++            if (m.gateways < UINT16_MAX)
++                m.gateways++;
++            if (hops < 0) {
++                if (m.unknownHops < 255)
++                    m.unknownHops++;
++            } else {
++                int h = hops < kReachHops ? hops : kReachHops - 1;
++                if (m.byHop[h] < 255)
++                    m.byHop[h]++;
++            }
++        }
++        m.lastEcho = when;
++        ver++;
++        return true;
++    }
++    return false; // not a message sent from this screen (position, telemetry, phone app...)
++}
++
++void Reach::forEach(const std::function<void(const ReachMsg &)> &fn) const
++{
++    std::lock_guard<std::mutex> lk(mtx);
++    for (uint32_t i = 0; i < count; i++)
++        fn(ring[(head + HOPTICS_REACH_MSGS - 1 - i) % HOPTICS_REACH_MSGS]);
++}
++
++bool Reach::find(uint32_t id, ReachMsg &out) const
++{
++    std::lock_guard<std::mutex> lk(mtx);
++    for (uint32_t i = 0; i < count; i++) {
++        const ReachMsg &m = ring[(head + HOPTICS_REACH_MSGS - 1 - i) % HOPTICS_REACH_MSGS];
++        if (m.id == id) {
++            out = m;
++            return true;
++        }
++    }
++    return false;
++}
++
++void Reach::clear(void)
++{
++    std::lock_guard<std::mutex> lk(mtx);
++    head = count = 0;
++    ver++;
++}
++
++} // namespace hoptics
++
++void hoptics_mqtt_echo(uint32_t packetId, const char *gatewayId, uint8_t hopStart, uint8_t hopLimit, bool self)
++{
++    uint32_t gw = 0;
++    if (gatewayId && gatewayId[0] == '!')
++        gw = (uint32_t)strtoul(gatewayId + 1, nullptr, 16);
++    if (!gw && !self)
++        return;
++    // hop_start is 0 on firmware older than 2.3: the gateway can't tell how far the packet came
++    int hops = hopStart == 0 ? -1 : (hopStart >= hopLimit ? hopStart - hopLimit : -1);
++    hoptics::Reach::get().echo(packetId, gw, hops, self, (uint32_t)time(nullptr));
++}
 diff --git a/source/graphics/TFT/HopticsReport.cpp b/source/graphics/TFT/HopticsReport.cpp
 new file mode 100644
 index 0000000..8f66cfd
@@ -2878,16 +3137,17 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..45aca9d
+index 0000000..ab22e7c
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,5692 @@
+@@ -0,0 +1,6150 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsUI.h"
 +#include "graphics/view/TFT/HopticsReport.h"
++#include "graphics/view/TFT/HopticsReach.h"
 +#include <algorithm>
 +#include <cmath>
 +#include <cstdio>
@@ -4008,6 +4268,7 @@ index 0000000..45aca9d
 +
 +    buildChatOverlay();
 +    buildNodeOverlay();
++    buildReachOverlay();
 +    buildEnvOverlay();
 +    buildSettingsOverlay();
 +    buildReportOverlay();
@@ -5255,7 +5516,54 @@ index 0000000..45aca9d
 +    if (mine) {
 +        lv_obj_t *st = label(meta, FSMALL, m.status == eFailed || m.status == eNoResponse ? C_RED : C_ME_META,
 +                             statusGlyph(m.status));
-+        bubbleRefs.push_back({m.requestId, st});
++        lv_obj_t *rl = nullptr;
++        if (m.requestId) {
++            // reach check: filled in by refreshBubbleReach() when MQTT copies of this message come back
++            rl = label(meta, FSMALL, C_ME_META, "");
++            lv_obj_add_flag(rl, LV_OBJ_FLAG_HIDDEN);
++            lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
++            lv_obj_set_user_data(b, (void *)(uintptr_t)m.requestId);
++            lv_obj_add_event_cb(
++                b,
++                [](lv_event_t *e) {
++                    HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                    ui->openReach((uint32_t)(uintptr_t)lv_obj_get_user_data((lv_obj_t *)lv_event_get_current_target(e)));
++                },
++                LV_EVENT_CLICKED, this);
++        }
++        bubbleRefs.push_back({m.requestId, st, rl});
++    }
++}
++
++// "12 gw - 3 hops": how far one of our messages got, from the gateways that uploaded it to MQTT
++static void reachLine(const hoptics::ReachMsg &m, char *buf, size_t len)
++{
++    buf[0] = 0;
++    if (!m.gateways) {
++        if (m.self)
++            snprintf(buf, len, "only your gateway");
++        return;
++    }
++    int h = m.maxHop();
++    if (h < 0)
++        snprintf(buf, len, "%u gw", (unsigned)m.gateways);
++    else
++        snprintf(buf, len, "%u gw - %d hop%s", (unsigned)m.gateways, h, h == 1 ? "" : "s");
++}
++
++void HopticsUI::refreshBubbleReach(void)
++{
++    hoptics::ReachMsg m;
++    char b[40];
++    for (auto &r : bubbleRefs) {
++        if (!r.reach || !hoptics::Reach::get().find(r.requestId, m))
++            continue;
++        reachLine(m, b, sizeof(b));
++        if (!b[0])
++            continue;
++        if (strcmp(lv_label_get_text(r.reach), b) != 0)
++            lv_label_set_text(r.reach, b);
++        lv_obj_remove_flag(r.reach, LV_OBJ_FLAG_HIDDEN);
 +    }
 +}
 +
@@ -5273,6 +5581,7 @@ index 0000000..45aca9d
 +    }
 +    for (const auto &m : c->msgs)
 +        appendBubble(m);
++    refreshBubbleReach();
 +    lv_obj_update_layout(chatMsgs);
 +    lv_obj_scroll_to_y(chatMsgs, LV_COORD_MAX, LV_ANIM_OFF);
 +}
@@ -5314,8 +5623,173 @@ index 0000000..45aca9d
 +        return;
 +    std::string text(txt);
 +    uint32_t reqId = cbs.sendText ? cbs.sendText(chatKey, text.c_str()) : 0;
++    hoptics::Reach::get().track(reqId, chatKey, nowTs, text.c_str()); // reach check: watch for MQTT copies
 +    lv_textarea_set_text(chatInput, "");
 +    addMessage(chatKey, myNode, nowTs, text.c_str(), reqId, eNone, false);
++}
++
++// ================================================================= REACH (how far did my message get?)
++void HopticsUI::buildReachOverlay(void)
++{
++    reachOv = overlayPanel("Reach", &reachOvTitle, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeReach(); });
++    lv_obj_t *body = plain(reachOv);
++    lv_obj_set_width(body, LV_PCT(100));
++    lv_obj_set_flex_grow(body, 1);
++    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_scroll_dir(body, LV_DIR_VER);
++    lv_obj_set_style_pad_all(body, PAD, 0);
++    column(body, PAD);
++
++    lv_obj_t *c = card(body, "YOUR MESSAGE");
++    reachText = label(c, &F14, C_TEXT, "");
++    lv_obj_set_width(reachText, LV_PCT(100));
++    lv_label_set_long_mode(reachText, LV_LABEL_LONG_MODE_WRAP);
++
++    lv_obj_t *cs = card(body, "HEARD BY MQTT GATEWAYS");
++    lv_obj_t *sr = plain(cs);
++    lv_obj_set_size(sr, LV_PCT(100), LV_SIZE_CONTENT);
++    row(sr, 10);
++    lv_obj_set_flex_align(sr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++    reachSum = label(sr, FBIG, C_CYAN, "0");
++    reachSub = label(sr, &F12, C_MUTED, "");
++    lv_obj_set_flex_grow(reachSub, 1);
++    lv_label_set_long_mode(reachSub, LV_LABEL_LONG_MODE_WRAP);
++    reachBars = plain(cs);
++    lv_obj_set_size(reachBars, LV_PCT(100), LV_SIZE_CONTENT);
++    column(reachBars, 3);
++
++#if HOPTICS_REACH_FULL
++    lv_obj_t *cg = card(body, "GATEWAYS BY HOPS");
++    reachGw = label(cg, &F12, C_TEXT, "");
++    lv_obj_set_width(reachGw, LV_PCT(100));
++    lv_label_set_long_mode(reachGw, LV_LABEL_LONG_MODE_WRAP);
++#endif
++    reachHelp = label(body, FSMALL, C_DIM, "");
++    lv_obj_set_width(reachHelp, LV_PCT(100));
++    lv_label_set_long_mode(reachHelp, LV_LABEL_LONG_MODE_WRAP);
++    lv_obj_add_flag(reachOv, LV_OBJ_FLAG_HIDDEN);
++}
++
++void HopticsUI::openReach(uint32_t requestId)
++{
++    if (!requestId)
++        return;
++    hideKeyboard();
++    reachId = requestId;
++    reachSeen = 0;
++    refreshReach();
++    lv_obj_scroll_to_y(lv_obj_get_child(reachOv, 1), 0, LV_ANIM_OFF);
++    lv_obj_remove_flag(reachOv, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_to_index(reachOv, -1);
++    lv_obj_move_to_index(toast, -1);
++}
++
++void HopticsUI::closeReach(void)
++{
++    lv_obj_add_flag(reachOv, LV_OBJ_FLAG_HIDDEN);
++    reachId = 0;
++}
++
++void HopticsUI::refreshReach(void)
++{
++    if (!reachOv || !reachId)
++        return;
++    static hoptics::ReachMsg m; // big on the R8 (gateway list): keep it off the UI task's stack
++    const bool have = hoptics::Reach::get().find(reachId, m);
++    if (!have) {
++        // sent before the last restart, or pushed out by newer messages
++        lv_label_set_text(reachText, "");
++        lv_label_set_text(reachSum, "-");
++        lv_label_set_text(reachSub, "Not tracked. Only the latest messages sent since the radio started are checked.");
++        lv_obj_clean(reachBars);
++        if (reachGw)
++            lv_label_set_text(reachGw, "");
++        lv_label_set_text(reachHelp, "");
++        return;
++    }
++    char b[200];
++    lv_label_set_text(reachText, m.text);
++    lv_label_set_text_fmt(reachSum, "%u", (unsigned)m.gateways);
++    {
++        int h = m.maxHop();
++        size_t n = 0;
++        b[0] = 0;
++        if (m.gateways)
++            n += snprintf(b + n, sizeof(b) - n, "gateway%s heard it", m.gateways == 1 ? "" : "s");
++        else
++            n += snprintf(b + n, sizeof(b) - n, "no copies back yet");
++        if (h >= 0 && n < sizeof(b))
++            n += snprintf(b + n, sizeof(b) - n, "\nfurthest %d hop%s out", h, h == 1 ? "" : "s");
++        if (m.self && n < sizeof(b))
++            n += snprintf(b + n, sizeof(b) - n, "\n+ uploaded by this radio");
++        lv_label_set_text(reachSub, b);
++    }
++
++    // one bar per hop count, at least out to 3 hops so a short reach still reads as short
++    lv_obj_clean(reachBars);
++    int top = std::max(3, m.maxHop());
++    uint8_t most = 1;
++    for (int h = 0; h <= top; h++)
++        most = std::max(most, m.byHop[h]);
++    const int32_t barMax = W() - 2 * PAD - 16 - 58 - 30;
++    for (int h = 0; h <= top; h++) {
++        lv_obj_t *r = plain(reachBars);
++        lv_obj_set_size(r, LV_PCT(100), 16);
++        row(r, 6);
++        lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++        if (h == 0)
++            snprintf(b, sizeof(b), "direct");
++        else
++            snprintf(b, sizeof(b), "%d hop%s", h, h == 1 ? "" : "s");
++        lv_obj_t *l = label(r, &F12, C_MUTED, b);
++        lv_obj_set_width(l, 58);
++        lv_obj_t *bar = plain(r);
++        int32_t w = m.byHop[h] ? std::max<int32_t>(4, barMax * m.byHop[h] / most) : 2;
++        lv_obj_set_size(bar, w, 10);
++        lv_obj_set_style_radius(bar, 3, 0);
++        lv_obj_set_style_bg_color(bar, m.byHop[h] ? C_CYAN : C_LINE, 0);
++        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
++        label(r, &F12, m.byHop[h] ? C_TEXT : C_DIM, std::to_string(m.byHop[h]).c_str());
++    }
++    if (m.unknownHops) {
++        lv_obj_t *l = label(reachBars, &F12, C_DIM, (std::to_string(m.unknownHops) + " on old firmware (hops unknown)").c_str());
++        lv_obj_set_width(l, LV_PCT(100));
++    }
++
++    if (reachGw) {
++        std::string g;
++        char nb[16];
++        for (int step = 0; step <= hoptics::kReachHops; step++) {
++            const int h = step < hoptics::kReachHops ? step : -1; // unknown hop counts last
++            std::string line;
++            for (uint8_t k = 0; k < m.nGw; k++) {
++                int gh = m.gwHop[k] == 0xFF ? -1 : m.gwHop[k];
++                if (gh != h)
++                    continue;
++                if (!line.empty())
++                    line += ", ";
++                line += nodeShort(m.gw[k], nb, sizeof(nb));
++            }
++            if (line.empty())
++                continue;
++            if (!g.empty())
++                g += "\n";
++            g += h < 0 ? "unknown: " : (h == 0 ? "direct: " : std::to_string(h) + (h == 1 ? " hop: " : " hops: "));
++            g += line;
++        }
++        if (m.gateways > m.nGw)
++            g += "\n+" + std::to_string(m.gateways - m.nGw) + " more";
++        lv_label_set_text(reachGw, g.empty() ? "-" : g.c_str());
++    }
++
++    if (!m.gateways)
++        lv_label_set_text(reachHelp, mqttUp ? "Waiting for gateways to upload it. Copies only come back if this radio "
++                                              "receives MQTT on the channel and 'Others may upload my messages' is on "
++                                              "(Settings > MQTT)."
++                                            : "Reach check needs Wi-Fi and MQTT. Set it up in Settings > MQTT.");
++    else
++        lv_label_set_text(reachHelp, "Direct = a gateway heard your radio itself. Each hop is one relay in between. "
++                                     "Only gateways that upload to your MQTT server are counted.");
 +}
 +
 +// ================================================================= NODE OVERLAY
@@ -6469,6 +6943,110 @@ index 0000000..45aca9d
 +    lv_obj_set_width(wfh, LV_PCT(100));
 +    lv_label_set_long_mode(wfh, LV_LABEL_LONG_MODE_WRAP);
 +
++    // MQTT + reach check
++    lv_obj_t *cmq = card(body, "MQTT  -  REACH CHECK");
++    {
++        lv_obj_t *intro = label(cmq, FSMALL, C_MUTED,
++                                "See how far your messages get: send one while connected, then tap your message "
++                                "bubble. Gateways that upload it to your MQTT server are counted by hops.");
++        lv_obj_set_width(intro, LV_PCT(100));
++        lv_label_set_long_mode(intro, LV_LABEL_LONG_MODE_WRAP);
++        for (int i = 0; i < 4; i++) {
++            setMqttCheck[i] = label(cmq, &F12, C_MUTED, "");
++            lv_obj_set_width(setMqttCheck[i], LV_PCT(100));
++            lv_label_set_long_mode(setMqttCheck[i], LV_LABEL_LONG_MODE_WRAP);
++        }
++    }
++    auto switchRow = [&](lv_obj_t *parent, const char *text, lv_obj_t **sw) {
++        lv_obj_t *rr = plain(parent);
++        lv_obj_set_size(rr, LV_PCT(100), LV_SIZE_CONTENT);
++        lv_obj_set_style_min_height(rr, 30, 0);
++        row(rr, 6);
++        lv_obj_set_flex_align(rr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++        lv_obj_t *l = label(rr, &F14, C_TEXT, text);
++        lv_obj_set_flex_grow(l, 1);
++        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
++        *sw = lv_switch_create(rr);
++        lv_obj_set_style_bg_color(*sw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    };
++    switchRow(cmq, "MQTT", &setMqttSw);
++    struct {
++        const char *name;
++        lv_obj_t **ta;
++        uint32_t max;
++        bool secret;
++    } mqf[4] = {{"Server  (blank = public Meshtastic)", &setMqttServer, 64, false},
++                {"Username", &setMqttUser, 63, false},
++                {"Password", &setMqttPass, 63, true},
++                {"Root topic  (e.g. msh/US)", &setMqttRoot, 31, false}};
++    for (auto &f : mqf) {
++        r = settingsRow(cmq, f.name);
++        lv_obj_t *ta = lv_textarea_create(r);
++        lv_textarea_set_one_line(ta, true);
++        lv_textarea_set_max_length(ta, f.max);
++        if (f.secret)
++            lv_textarea_set_password_mode(ta, true);
++        lv_obj_set_width(ta, LV_PCT(100));
++        styleTextarea(ta);
++        lv_obj_add_event_cb(
++            ta,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                ui->showKeyboard((lv_obj_t *)lv_event_get_current_target(e));
++            },
++            LV_EVENT_CLICKED, this);
++        lv_obj_add_event_cb(
++            ta, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->hideKeyboard(); }, LV_EVENT_READY, this);
++        *f.ta = ta;
++    }
++    switchRow(cmq, "Others may upload my messages", &setOkMqttSw);
++    switchRow(cmq, "Receive MQTT on the primary channel", &setDownSw);
++    lv_obj_t *msave = flatButton(cmq, LV_SYMBOL_SAVE " Save & restart", C_CYAN, LV_PCT(100), 34);
++    lv_obj_add_event_cb(
++        msave,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            lv_obj_t *b = (lv_obj_t *)lv_event_get_current_target(e);
++            ui->hideKeyboard();
++            if (!lv_obj_has_state(b, LV_STATE_USER_1)) { // two-tap confirm: saving restarts the radio
++                lv_obj_add_state(b, LV_STATE_USER_1);
++                setButtonText(b, "Tap again to restart");
++                lv_timer_t *t = lv_timer_create(
++                    [](lv_timer_t *t) {
++                        lv_obj_t *btn = (lv_obj_t *)lv_timer_get_user_data(t);
++                        lv_obj_remove_state(btn, LV_STATE_USER_1);
++                        setButtonText(btn, LV_SYMBOL_SAVE " Save & restart");
++                    },
++                    3000, b);
++                lv_timer_set_repeat_count(t, 1);
++                return;
++            }
++            const char *pass = lv_textarea_get_text(ui->setMqttPass);
++            if (ui->cbs.setMqtt)
++                ui->cbs.setMqtt(lv_obj_has_state(ui->setMqttSw, LV_STATE_CHECKED), lv_textarea_get_text(ui->setMqttServer),
++                                lv_textarea_get_text(ui->setMqttUser), pass[0] ? pass : nullptr,
++                                lv_textarea_get_text(ui->setMqttRoot), lv_obj_has_state(ui->setOkMqttSw, LV_STATE_CHECKED),
++                                lv_obj_has_state(ui->setDownSw, LV_STATE_CHECKED));
++            setButtonText(b, "Restarting...");
++            ui->showToast(LV_SYMBOL_REFRESH " MQTT saved - restarting", 6000);
++        },
++        LV_EVENT_CLICKED, this);
++    lv_obj_t *mqh = label(cmq, FSMALL, C_DIM,
++                          "SETUP\n"
++                          "1. Turn Wi-Fi on above.\n"
++                          "2. Ask your local mesh group for their MQTT server, username, password and root topic. "
++                          "Regional servers carry your area's traffic. Blank server, username and password use the "
++                          "public Meshtastic server (root msh/US).\n"
++                          "3. Turn on 'Others may upload my messages'. Gateways on public servers drop messages from "
++                          "radios that don't allow it.\n"
++                          "4. Turn on 'Receive MQTT on the primary channel'. That is how the copies of your messages "
++                          "come back to this radio.\n"
++                          "5. Save. The list above turns green when it's working.\n"
++                          "This radio does not need to upload (uplink) itself. Traffic from MQTT shows on screen but "
++                          "is never sent out over LoRa. Leave the password blank to keep the saved one.");
++    lv_obj_set_width(mqh, LV_PCT(100));
++    lv_label_set_long_mode(mqh, LV_LABEL_LONG_MODE_WRAP);
++
 +    // street map
 +    lv_obj_t *cm = card(body, "MAP");
 +    lv_obj_t *mr = plain(cm);
@@ -6738,6 +7316,24 @@ index 0000000..45aca9d
 +        lv_obj_remove_state(setWifiSw, LV_STATE_CHECKED);
 +    lv_textarea_set_text(setSsid, wifiSsid);
 +    lv_textarea_set_text(setPsk, "");
++    if (mqttEnabled)
++        lv_obj_add_state(setMqttSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setMqttSw, LV_STATE_CHECKED);
++    if (okToMqtt)
++        lv_obj_add_state(setOkMqttSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setOkMqttSw, LV_STATE_CHECKED);
++    if (downlinkOn)
++        lv_obj_add_state(setDownSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setDownSw, LV_STATE_CHECKED);
++    lv_textarea_set_text(setMqttServer, mqttServer);
++    lv_textarea_set_text(setMqttUser, mqttUser);
++    lv_textarea_set_text(setMqttRoot, mqttRoot);
++    lv_textarea_set_text(setMqttPass, "");
++    lv_textarea_set_placeholder_text(setMqttPass, mqttHasPass ? "saved - blank keeps it" : "if the server needs one");
++    refreshMqttChecklist();
 +    lv_textarea_set_placeholder_text(setPsk, wifiHasPsk ? "saved - blank keeps it" : "network password");
 +    if (lnaMode == 2) {
 +        lv_obj_add_flag(setLnaRow, LV_OBJ_FLAG_HIDDEN); // no controllable LNA on this board
@@ -7169,6 +7765,50 @@ index 0000000..45aca9d
 +    wifiHasPsk = hasPassword;
 +}
 +
++void HopticsUI::setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root)
++{
++    mqttEnabled = enabled;
++    snprintf(mqttServer, sizeof(mqttServer), "%s", server ? server : "");
++    snprintf(mqttUser, sizeof(mqttUser), "%s", user ? user : "");
++    snprintf(mqttRoot, sizeof(mqttRoot), "%s", root ? root : "");
++    mqttHasPass = hasPassword;
++    refreshMqttChecklist();
++}
++
++void HopticsUI::setOkToMqtt(bool on)
++{
++    okToMqtt = on;
++    refreshMqttChecklist();
++}
++
++void HopticsUI::setDownlink(bool on)
++{
++    downlinkOn = on;
++    refreshMqttChecklist();
++}
++
++// Settings > MQTT: what the reach check still needs, green when done
++void HopticsUI::refreshMqttChecklist(void)
++{
++    if (!setMqttCheck[0])
++        return;
++    struct {
++        bool ok;
++        const char *yes, *no;
++    } items[4] = {
++        {wifiOn && wifiUp, "Wi-Fi connected", "Wi-Fi not connected"},
++        {mqttUp, "MQTT server connected", mqttEnabled ? "MQTT on, not connected yet" : "MQTT is off"},
++        {okToMqtt, "Others may upload my messages", "Others may not upload my messages"},
++        {downlinkOn, "Receiving MQTT on the primary channel", "Not receiving MQTT on the primary channel"},
++    };
++    for (int i = 0; i < 4; i++) {
++        char b[64];
++        snprintf(b, sizeof(b), "%s  %s", items[i].ok ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE, items[i].ok ? items[i].yes : items[i].no);
++        lv_label_set_text(setMqttCheck[i], b);
++        lv_obj_set_style_text_color(setMqttCheck[i], items[i].ok ? C_GREEN : C_AMBER, 0);
++    }
++}
++
 +void HopticsUI::setLnaMode(int mode)
 +{
 +    lnaMode = mode;
@@ -7189,6 +7829,7 @@ index 0000000..45aca9d
 +    mqttUp = mqtt;
 +    wifiRssi = rssi;
 +    refreshStatusBar();
++    refreshMqttChecklist();
 +}
 +void HopticsUI::setUiConfig(uint8_t b, uint16_t timeout, bool banner)
 +{
@@ -7795,6 +8436,16 @@ index 0000000..45aca9d
 +    if (lv_tick_elaps(mapNoteTick) < 400)
 +        return;
 +    mapNoteTick = lv_tick_get();
++    {
++        uint32_t v = hoptics::Reach::get().version();
++        if (v != reachSeen) {
++            reachSeen = v;
++            if (!bubbleRefs.empty())
++                refreshBubbleReach();
++            if (reachId && !lv_obj_has_flag(reachOv, LV_OBJ_FLAG_HIDDEN))
++                refreshReach();
++        }
++    }
 +    if (activeTab == T_MAP)
 +        refreshMapNote();
 +    if (setOv && setMapInfo && !lv_obj_has_flag(setOv, LV_OBJ_FLAG_HIDDEN)) {
@@ -8240,6 +8891,72 @@ index 0000000..45aca9d
 +        }
 +        o += ']';
 +    }
++    // reach check: our own messages and the MQTT gateways that uploaded them. Message text only for channel
++    // messages and only with web chat on (same rule as above); never the MQTT username or password.
++    o += ",\"reach\":{\"full\":";
++    o += HOPTICS_REACH_FULL ? "true" : "false";
++    o += ",\"setup\":{\"wifi\":";
++    o += (wifiOn && wifiUp) ? "true" : "false";
++    o += ",\"enabled\":";
++    o += mqttEnabled ? "true" : "false";
++    o += ",\"up\":";
++    o += mqttUp ? "true" : "false";
++    o += ",\"okToMqtt\":";
++    o += okToMqtt ? "true" : "false";
++    o += ",\"downlink\":";
++    o += downlinkOn ? "true" : "false";
++    o += ",\"server\":";
++    jsonStr(o, mqttServer[0] ? mqttServer : "public Meshtastic server");
++    o += ",\"root\":";
++    jsonStr(o, mqttRoot);
++    o += "},\"msgs\":[";
++    {
++        bool firstMsg = true;
++        hoptics::Reach::get().forEach([&](const hoptics::ReachMsg &m) {
++            const bool dm = m.convKey >= kMaxChannels;
++            if (!firstMsg)
++                o += ',';
++            firstMsg = false;
++            snprintf(b, sizeof(b), "{\"id\":\"%08x\"", (unsigned)m.id);
++            o += b;
++            jsonNum(o, "t", m.sent);
++            jsonNum(o, "last", m.lastEcho ? m.lastEcho : NAN);
++            o += ",\"ch\":";
++            if (dm)
++                o += "null";
++            else
++                jsonStr(o, channelNames[m.convKey][0] ? channelNames[m.convKey] : (m.convKey == 0 ? "Primary" : "Channel"));
++            o += ",\"text\":";
++            if (webChat && !dm)
++                jsonStr(o, m.text);
++            else
++                o += "null";
++            jsonNum(o, "gw", m.gateways);
++            jsonNum(o, "unk", m.unknownHops);
++            o += ",\"self\":";
++            o += m.self ? "true" : "false";
++            o += ",\"byHop\":[";
++            for (int h = 0; h < hoptics::kReachHops; h++) {
++                snprintf(b, sizeof(b), h ? ",%u" : "%u", (unsigned)m.byHop[h]);
++                o += b;
++            }
++            o += ']';
++#if HOPTICS_REACH_FULL
++            o += ",\"gws\":[";
++            for (uint8_t k = 0; k < m.nGw; k++) {
++                snprintf(b, sizeof(b), "%s{\"id\":\"!%08x\",\"short\":", k ? "," : "", (unsigned)m.gw[k]);
++                o += b;
++                char nb[16];
++                jsonStr(o, const_cast<HopticsUI *>(this)->nodeShort(m.gw[k], nb, sizeof(nb)));
++                jsonNum(o, "hops", m.gwHop[k] == 0xFF ? NAN : m.gwHop[k]);
++                o += '}';
++            }
++            o += ']';
++#endif
++            o += '}';
++        });
++    }
++    o += "]}";
 +    o += '}';
 +}
 +
@@ -8576,10 +9293,10 @@ index 0000000..45aca9d
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..25dc128
+index 0000000..158e312
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,747 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -8907,6 +9624,42 @@ index 0000000..25dc128
 +        controller->sendConfig(meshtastic_Config_NetworkConfig{n}, ownNode); // network changes restart the radio
 +        armRebootFallback();
 +    };
++    cb.setMqtt = [this](bool enabled, const char *server, const char *user, const char *pass, const char *root, bool okToMqtt,
++                        bool downlink) {
++        // only what changed: each of these restarts the radio, and the restart is delayed long enough for all three
++        if (haveChannel0 && channel0.has_settings && channel0.settings.downlink_enabled != downlink) {
++            meshtastic_Channel c = channel0;
++            c.settings.downlink_enabled = downlink;
++            channel0 = c;
++            controller->sendConfig(c, ownNode);
++        }
++        if (haveLora && lora.config_ok_to_mqtt != okToMqtt) {
++            meshtastic_Config_LoRaConfig l = lora;
++            l.config_ok_to_mqtt = okToMqtt;
++            controller->sendConfig(std::move(l), ownNode);
++        }
++        meshtastic_ModuleConfig_MQTTConfig m = mqtt;
++        m.enabled = enabled;
++        const bool blankServer = !server || !server[0];
++        snprintf(m.address, sizeof(m.address), "%s", blankServer ? "mqtt.meshtastic.org" : server);
++        if (blankServer && (!user || !user[0])) {
++            // the public server's well-known login (Meshtastic's own defaults)
++            snprintf(m.username, sizeof(m.username), "meshdev");
++            snprintf(m.password, sizeof(m.password), "large4cats");
++        } else {
++            snprintf(m.username, sizeof(m.username), "%s", user ? user : "");
++            // "sekrit" is the firmware's keep-the-saved-secret marker (AdminModule writeSecret)
++            snprintf(m.password, sizeof(m.password), "%s", pass ? pass : "sekrit");
++        }
++        snprintf(m.root, sizeof(m.root), "%s", root && root[0] ? root : "msh/US");
++        const bool changed = !haveMqtt || m.enabled != mqtt.enabled || strcmp(m.address, mqtt.address) ||
++                             strcmp(m.username, mqtt.username) || strcmp(m.root, mqtt.root) || pass ||
++                             (blankServer && strcmp(mqtt.password, "large4cats"));
++        if (changed) {
++            mqtt = m;
++            controller->sendConfig(meshtastic_ModuleConfig_MQTTConfig{m}, ownNode);
++        }
++    };
 +    cb.setLnaMode = [this](int m) {
 +        if (!haveLora)
 +            return;
@@ -9049,6 +9802,11 @@ index 0000000..25dc128
 +{
 +    if (ch.index == 0 && ch.has_settings)
 +        strncpy(channel0Name, ch.settings.name, sizeof(channel0Name) - 1);
++    if (ch.index == 0) {
++        channel0 = ch;
++        haveChannel0 = true;
++        ui.setDownlink(ch.has_settings && ch.settings.downlink_enabled);
++    }
 +    ui.setChannel((uint8_t)ch.index, ch.has_settings ? ch.settings.name : "", ch.role != meshtastic_Channel_Role_DISABLED);
 +    if (ch.index == 0)
 +        pushRadioInfo();
@@ -9066,6 +9824,7 @@ index 0000000..25dc128
 +    lora = cfg;
 +    haveLora = true;
 +    ui.setLnaMode((int)cfg.fem_lna_mode);
++    ui.setOkToMqtt(cfg.config_ok_to_mqtt);
 +    pushRadioInfo();
 +}
 +
@@ -9119,6 +9878,12 @@ index 0000000..25dc128
 +void HopticsView::updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg)
 +{
 +    mqttEnabled = cfg.enabled;
++    mqtt = cfg;
++    haveMqtt = true;
++    // the firmware's own default server shows as blank: "blank = public Meshtastic server"
++    const bool isDefault = strcmp(cfg.address, "mqtt.meshtastic.org") == 0;
++    ui.setMqttConfig(cfg.enabled, isDefault ? "" : cfg.address, isDefault && strcmp(cfg.username, "meshdev") == 0 ? "" : cfg.username,
++                     cfg.password[0] != 0, cfg.root);
 +}
 +
 +void HopticsView::updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg)

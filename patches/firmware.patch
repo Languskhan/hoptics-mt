@@ -819,6 +819,35 @@ index 44d2400..c4311cb 100644
      /// NodeInfo cache capacity.
      static constexpr uint16_t nodeInfoTargetEntries() { return kNodeInfoCacheEntries; }
  
+diff --git a/src/mqtt/MQTT.cpp b/src/mqtt/MQTT.cpp
+index ea1d5dd..bded321 100644
+--- a/src/mqtt/MQTT.cpp
++++ b/src/mqtt/MQTT.cpp
+@@ -89,6 +89,11 @@ inline bool shouldDropMqttDownlink(const meshtastic_MeshPacket &packet)
+     return false;
+ }
+ 
++#if defined(HOPTICS_UI)
++// Hoptics MT reach check (device-ui HopticsReach.cpp): copies of our own messages uploaded by other gateways
++void hoptics_mqtt_echo(uint32_t packetId, const char *gatewayId, uint8_t hopStart, uint8_t hopLimit, bool self);
++#endif
++
+ inline void onReceiveProto(char *topic, byte *payload, size_t length)
+ {
+     const DecodedServiceEnvelope e(payload, length);
+@@ -119,6 +124,12 @@ inline void onReceiveProto(char *topic, byte *payload, size_t length)
+     }
+     // Generate node ID from nodenum for comparison
+     std::string nodeId = nodeDB->getNodeId();
++#if defined(HOPTICS_UI)
++    // Before the copy is dropped below: note which gateway heard our message and how many hops away it was
++    if (isFromUs(e.packet))
++        hoptics_mqtt_echo(e.packet->id, e.gateway_id, (uint8_t)e.packet->hop_start, (uint8_t)e.packet->hop_limit,
++                          strcmp(e.gateway_id, nodeId.c_str()) == 0);
++#endif
+     if (strcmp(e.gateway_id, nodeId.c_str()) == 0) {
+         // Generate an implicit ACK towards ourselves (handled and processed only locally!) for this message.
+         // We do this because packets are not rebroadcasted back into MQTT anymore and we assume that at least one node
 diff --git a/variants/esp32s3/heltec_v4/platformio.ini b/variants/esp32s3/heltec_v4/platformio.ini
 index 73a863d..3215a82 100644
 --- a/variants/esp32s3/heltec_v4/platformio.ini
