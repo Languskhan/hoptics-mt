@@ -1,6 +1,8 @@
 harness/shots/
+harness/shots_*/
 harness/*.o
 harness/harness
+harness/harness_*
 harness/stress
 *.ppm
 cities*.zip
