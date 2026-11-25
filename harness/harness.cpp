@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <string>
 #include <unistd.h>
 
@@ -54,6 +55,97 @@ static void pump(int ms)
     lv_refr_now(NULL);
 }
 
+// Virtual keyboard and trackball, read by LVGL like real indevs: a keypad (T-Deck Plus / ThinkNode M9
+// keyboard) and an encoder (T-Deck trackball, which device-ui's EncoderInputDriver reports as turns for
+// up/down and LV_KEY_DOWN / LV_KEY_UP keys for left/right).
+struct InEv {
+    uint32_t key;
+    int diff;
+    bool pressed;
+};
+static std::deque<InEv> kbdQ, encQ;
+static uint32_t kbdLast = 0, encLast = 0;
+static void kbd_read(lv_indev_t *, lv_indev_data_t *d)
+{
+    if (!kbdQ.empty()) {
+        kbdLast = kbdQ.front().key;
+        d->state = kbdQ.front().pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+        kbdQ.pop_front();
+        d->continue_reading = !kbdQ.empty();
+    } else
+        d->state = LV_INDEV_STATE_RELEASED;
+    d->key = kbdLast;
+}
+static void enc_read(lv_indev_t *, lv_indev_data_t *d)
+{
+    if (!encQ.empty()) {
+        const InEv &e = encQ.front();
+        encLast = e.key ? e.key : encLast;
+        d->enc_diff = (int16_t)e.diff;
+        d->state = e.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+        encQ.pop_front();
+        d->continue_reading = !encQ.empty();
+    } else
+        d->state = LV_INDEV_STATE_RELEASED;
+    d->key = encLast;
+}
+
+static std::deque<InEv> touchQ;
+static lv_point_t touchAt{};
+static void touch_read(lv_indev_t *, lv_indev_data_t *d) // key = x, diff = y
+{
+    if (!touchQ.empty()) {
+        touchAt = {(int32_t)touchQ.front().key, (int32_t)touchQ.front().diff};
+        d->state = touchQ.front().pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+        touchQ.pop_front();
+    } else
+        d->state = LV_INDEV_STATE_RELEASED;
+    d->point = touchAt;
+}
+
+static void pump(int ms);
+static void tap(lv_obj_t *o) // a finger on the middle of an object
+{
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    const uint32_t x = (uint32_t)(a.x1 + a.x2) / 2;
+    const int y = (a.y1 + a.y2) / 2;
+    touchQ.push_back({x, y, true});
+    touchQ.push_back({x, y, true});
+    touchQ.push_back({x, y, false});
+    pump(150);
+}
+static void key(uint32_t k, int times = 1) // press and release on the keyboard
+{
+    for (int i = 0; i < times; i++) {
+        kbdQ.push_back({k, 0, true});
+        kbdQ.push_back({k, 0, false});
+        pump(80);
+    }
+}
+static void type(const char *text)
+{
+    for (const char *c = text; *c; c++)
+        key((uint8_t)*c);
+}
+static void turn(int steps) // trackball up (-) / down (+)
+{
+    encQ.push_back({0, steps, false});
+    pump(80);
+}
+static void ball(uint32_t k) // trackball press (LV_KEY_ENTER) or left / right (LV_KEY_DOWN / LV_KEY_UP)
+{
+    encQ.push_back({k, 0, true});
+    encQ.push_back({k, 0, false});
+    pump(80);
+}
+
+static void shot(const char *name);
+static void kshot(const char *name) // after keys: let scroll-into-view animations finish first
+{
+    pump(400);
+    shot(name);
+}
 static void shot(const char *name)
 {
     settleMap();
@@ -433,11 +525,17 @@ int main(int argc, char **argv)
     ui.setNetwork(true, true, 0x05000a0a, true, -58);
     ui.setWifiConfig("HomeWiFi", true);
     ui.setLnaMode(3);
+    ui.setGpsMode(2); // "not present" as left by a stock build: the switch shows on boards with GPS
     ui.openSettings();
     pump(20);
     lv_obj_scroll_to_view_recursive(ui.setLnaDd, LV_ANIM_OFF);
     pump(20);
     shot("43_settings_lna");
+    if (!lv_obj_has_flag(ui.setGpsRow, LV_OBJ_FLAG_HIDDEN)) { // boards with a GPS receiver
+        lv_obj_scroll_to_view_recursive(ui.setGpsSw, LV_ANIM_OFF);
+        pump(20);
+        shot("43b_settings_gps");
+    }
     lv_obj_scroll_to_view_recursive(ui.setPsk, LV_ANIM_OFF); lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setPsk))), 0, -90, LV_ANIM_OFF);
     pump(20);
     shot("44_settings_wifi");
@@ -534,5 +632,223 @@ int main(int argc, char **argv)
     pump(30);
     shot("42_phone_mode_leaving");
     { lv_mem_monitor_t mon; lv_mem_monitor(&mon); printf("LVGL mem after theme switches: %u KB used (max %u KB, frag %u%%)\n", (unsigned)((mon.total_size-mon.free_size)/1024), (unsigned)(mon.max_used/1024), (unsigned)mon.frag_pct); }
+
+    // ------------------------------------------------------------ keyboard and trackball navigation
+    // Landscape panels are the keyboard devices, so their run adds these (HARNESS_KEYS=1/0 overrides).
+    const char *kv = getenv("HARNESS_KEYS");
+    if (kv ? atoi(kv) != 0 : WD > HT) {
+        lv_obj_t *phone = ui.phoneScreen;
+        ui.phoneScreen = nullptr;
+        lv_screen_load(ui.mainScreen);
+        lv_obj_delete(phone);
+        ui.closeSettings(); // still open under the phone-mode shots
+        lv_indev_t *kbd = lv_indev_create();
+        lv_indev_set_type(kbd, LV_INDEV_TYPE_KEYPAD);
+        lv_indev_set_read_cb(kbd, kbd_read);
+        lv_indev_t *enc = lv_indev_create();
+        lv_indev_set_type(enc, LV_INDEV_TYPE_ENCODER);
+        lv_indev_set_read_cb(enc, enc_read);
+        ui.inputDevicesChanged(); // like a board whose keyboard came up after the screen
+        int fails = 0;
+        auto focused = [&]() { return lv_group_get_focused(lv_group_get_default()); };
+        auto expect = [&](bool ok, const char *what) {
+            if (!ok) {
+                lv_obj_t *f = focused();
+                printf("KEYS FAIL: %s (focus %p, parent %p, index %d, tab %d)\n", what, (void *)f,
+                       f ? (void *)lv_obj_get_parent(f) : nullptr, f ? (int)lv_obj_get_index(f) : -1, (int)ui.activeTab);
+                fails++;
+            }
+        };
+        expect(lv_group_get_default() && lv_indev_get_group(kbd) == lv_group_get_default(), "keyboard on the default group");
+
+        ui.selectTab(HopticsUI::T_HOME);
+        pump(100);
+        expect(focused() == ui.homeEnv, "Home starts on the environment card");
+        kshot("60_keys_home");
+        key(LV_KEY_DOWN);
+        expect(focused() == ui.homeLast[0], "DOWN: first last-heard row");
+        kshot("60b_keys_home_last_heard");
+
+        key(LV_KEY_RIGHT); // next tab
+        expect(ui.activeTab == HopticsUI::T_LIVE, "RIGHT: Live tab");
+        key(LV_KEY_DOWN, 4); // past the three filter chips to the second row
+        expect(focused() == ui.liveRows[1].row, "DOWN x4: second live row");
+        kshot("61_keys_live_row");
+        uint32_t rowNode = (uint32_t)(uintptr_t)lv_obj_get_user_data(ui.liveRows[1].row);
+        key(LV_KEY_ENTER);
+        expect(!lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN) && ui.nodeOvNum == rowNode, "ENTER: that node's page");
+        kshot("62_keys_node");
+        key(LV_KEY_DOWN);
+        kshot("62b_keys_node_actions");
+        key(LV_KEY_ESC);
+        expect(lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN) && focused() == ui.liveRows[1].row, "ESC: back on the same row");
+        kshot("63_keys_back_to_list");
+
+        key('c'); // shortcut
+        expect(ui.activeTab == HopticsUI::T_CHAT, "'c': Chat tab");
+        key(LV_KEY_DOWN);
+        key(LV_KEY_ENTER);
+        expect(!lv_obj_has_flag(ui.chatOv, LV_OBJ_FLAG_HIDDEN) && focused() == ui.chatInput, "ENTER on a chat: typing in the message");
+        type("On my way, ETA 20 min");
+        kshot("64_keys_chat_typing");
+        key(LV_KEY_ENTER); // send
+        expect(lv_textarea_get_text(ui.chatInput)[0] == 0, "ENTER: sent");
+        key(LV_KEY_UP); // to the conversation, then scroll it
+        expect(focused() == ui.chatMsgs, "UP: the conversation");
+        key(LV_KEY_UP, 2);
+        kshot("64b_keys_chat_scrolled");
+        key(LV_KEY_ESC);
+        expect(lv_obj_has_flag(ui.chatOv, LV_OBJ_FLAG_HIDDEN) && ui.activeTab == HopticsUI::T_CHAT, "ESC: back to the chat list");
+        kshot("64c_keys_chat_list");
+
+        for (int i = 0; i < 30 && focused() != ui.statusGear; i++)
+            key(LV_KEY_NEXT);
+        expect(focused() == ui.statusGear, "NEXT: reaches the settings gear");
+        kshot("65_keys_gear");
+        key(LV_KEY_ENTER);
+        expect(focused() == ui.setThemeDd, "Settings start on the theme");
+        kshot("65b_keys_settings");
+        key(LV_KEY_ENTER);
+        expect(lv_dropdown_is_open(ui.setThemeDd), "ENTER: list open");
+        key(LV_KEY_DOWN);
+        kshot("65c_keys_settings_list");
+        key(LV_KEY_ESC);
+        expect(!lv_dropdown_is_open(ui.setThemeDd) && !lv_obj_has_flag(ui.setOv, LV_OBJ_FLAG_HIDDEN), "ESC: list closed, still in Settings");
+        key(LV_KEY_DOWN);
+        expect(focused() == ui.setBright, "DOWN: brightness");
+        int32_t b0 = lv_slider_get_value(ui.setBright);
+        key(LV_KEY_LEFT, 3);
+        expect(lv_slider_get_value(ui.setBright) < b0 && ui.brightness == lv_slider_get_value(ui.setBright), "LEFT: dimmer, applied");
+        kshot("66_keys_settings_slider");
+        for (int i = 0; i < 40 && focused() != ui.setShort; i++)
+            key(LV_KEY_DOWN);
+        expect(focused() == ui.setShort, "DOWN: short name field");
+        key(LV_KEY_BACKSPACE);
+        type("Hx");
+        key(LV_KEY_ENTER);
+        expect(focused() == ui.setLong, "ENTER in a field: next field");
+        kshot("66b_keys_settings_names");
+        key(LV_KEY_ESC);
+        expect(lv_obj_has_flag(ui.setOv, LV_OBJ_FLAG_HIDDEN) && focused() == ui.statusGear, "ESC: Settings closed, back on the gear");
+
+        key('m');
+        expect(ui.activeTab == HopticsUI::T_MAP, "'m': Map tab");
+        key(LV_KEY_DOWN, 3);
+        expect(focused() == ui.mapArea, "DOWN x3: the map");
+        key(LV_KEY_ENTER);
+        expect(ui.mapPan, "ENTER: panning");
+        key(LV_KEY_RIGHT);
+        key(LV_KEY_UP);
+        kshot("67_keys_map_pan");
+        key(LV_KEY_ENTER);
+        expect(!ui.mapPan && focused() == ui.mapArea, "ENTER: done panning");
+
+        key('s');
+        key(LV_KEY_DOWN, 2);
+        kshot("68_keys_stats_scroll");
+
+        // trackball: turns move, left / right switch tabs, press opens
+        key('n');
+        turn(4);
+        expect(focused() == ui.nodeRows[0].row, "trackball down x4: first node row");
+        kshot("69_keys_trackball_nodes");
+        ball(LV_KEY_DOWN); // trackball left
+        expect(ui.activeTab == HopticsUI::T_CHAT, "trackball left: previous tab");
+        ball(LV_KEY_UP); // trackball right
+        expect(ui.activeTab == HopticsUI::T_NODES, "trackball right: next tab");
+        turn(4);
+        ball(LV_KEY_ENTER);
+        expect(!lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN), "trackball press: node page");
+        ball(LV_KEY_DOWN);
+        expect(lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN), "trackball left in a page: back");
+        ui.openChat(1);
+        pump(50);
+        turn(-1); // from the message field up to the conversation
+        expect(focused() == ui.chatMsgs, "trackball up: the conversation");
+        ball(LV_KEY_ENTER); // edit mode: turning scrolls
+        turn(-2);
+        kshot("69b_keys_trackball_scroll");
+        ball(LV_KEY_ENTER);
+        ball(LV_KEY_DOWN);
+        expect(lv_obj_has_flag(ui.chatOv, LV_OBJ_FLAG_HIDDEN), "trackball left: chat closed");
+
+        // focus in every theme
+        const char *tn[4] = {"midnight", "daylight", "nightred", "amber"};
+        for (int t = 0; t < 4; t++) {
+            ui.setTheme(t);
+            key('n');
+            lv_group_focus_obj(ui.sortBtns[3]); // the tab remembers its last row: start from the sort buttons
+            key(LV_KEY_DOWN, 2);
+            expect(focused() == ui.nodeRows[1].row, "theme: second node row");
+            kshot((std::string("70_keys_nodes_") + tn[t]).c_str());
+            ui.openSettings();
+            pump(50);
+            key(LV_KEY_DOWN, 3);
+            kshot((std::string("70b_keys_settings_") + tn[t]).c_str());
+            key(LV_KEY_ESC);
+        }
+        ui.setTheme(0);
+
+        // first-boot wizard by keys
+        ui.wizardShown = false;
+        ui.region = 0;
+        ui.maybeShowWizard();
+        pump(50);
+        expect(focused() == ui.wizRegion, "wizard starts on the region");
+        kshot("71_keys_wizard_region");
+        key(LV_KEY_RIGHT);
+        expect(ui.wizStep == 1 && focused() == ui.wizLong, "RIGHT: names, on the long name");
+        type(" 2");
+        key(LV_KEY_ENTER);
+        expect(focused() == ui.wizShort, "ENTER: on to the short name");
+        kshot("71b_keys_wizard_name");
+        key(LV_KEY_ENTER);
+        expect(focused() == ui.wizNext, "ENTER: on to Next (before Skip)");
+        key(LV_KEY_ENTER);
+        expect(ui.wizStep == 2, "ENTER on Next: the look");
+        key(LV_KEY_DOWN);
+        kshot("71c_keys_wizard_theme");
+        key(LV_KEY_ESC, 2);
+        expect(ui.wizStep == 0 && !lv_obj_has_flag(ui.wizOv, LV_OBJ_FLAG_HIDDEN), "ESC: back two steps, still in the wizard");
+        lv_obj_add_flag(ui.wizOv, LV_OBJ_FLAG_HIDDEN);
+        ui.keyScope();
+
+        ui.openReport(false);
+        pump(20);
+        kshot("72_keys_report");
+        key(LV_KEY_ESC);
+        expect(lv_obj_has_flag(ui.repOv, LV_OBJ_FLAG_HIDDEN), "ESC: report closed");
+
+        ui.keyCommand(HopticsUI::KEY_COMPOSE); // ThinkNode M9 "preset" key
+        expect(!lv_obj_has_flag(ui.chatOv, LV_OBJ_FLAG_HIDDEN) && focused() == ui.chatInput, "compose key: primary channel, typing");
+        ui.keyCommand(HopticsUI::KEY_HOME);
+        expect(lv_obj_has_flag(ui.chatOv, LV_OBJ_FLAG_HIDDEN) && ui.activeTab == HopticsUI::T_HOME, "home key");
+
+        // keyboard plus touch screen (T-Deck Plus): a tap hides the ring, the next key brings it back
+        lv_indev_t *touch = lv_indev_create();
+        lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_read_cb(touch, touch_read);
+        ui.inputDevicesChanged();
+        key('n');
+        key(LV_KEY_DOWN);
+        expect(focused() && lv_obj_has_state(focused(), LV_STATE_FOCUS_KEY), "keys: ring on");
+        tap(ui.nodeRows[2].row);
+        expect(!lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN), "tap: node page");
+        expect(!focused() || !lv_obj_has_state(focused(), LV_STATE_FOCUS_KEY), "tap: no ring");
+        kshot("74_keys_touch_no_ring");
+        key(LV_KEY_DOWN);
+        expect(focused() && lv_obj_has_state(focused(), LV_STATE_FOCUS_KEY), "key after a tap: ring back");
+        key(LV_KEY_ESC);
+        expect(lv_obj_has_flag(ui.nodeOv, LV_OBJ_FLAG_HIDDEN) && focused() == ui.nodeRows[2].row &&
+                   lv_obj_has_state(focused(), LV_STATE_FOCUS_KEY),
+               "ESC: back on the tapped row, with the ring");
+
+        ui.showPhoneMode(482913, false);
+        pump(30);
+        kshot("73_keys_phone_mode");
+        printf("key navigation: %d failed checks\n", fails);
+        if (fails)
+            return 1;
+    }
     return 0;
 }
