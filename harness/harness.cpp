@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 
     const uint32_t me = 0xa1b2c3d4;
     ui.setMyNode(me);
-    ui.upsertNode(me, 0, now, "HOPT", "Hoptics V4 Kit", 0, true, false, 110);
+    ui.upsertNode(me, 0, now, "BLF1", "Bluffs V4 Kit", 0, true, false, 110);
     ui.updatePosition(me, 398000000, -896500000, 70);
     ui.updateMetrics(me, 87, 4.02f, 14.6f, 2.3f);
     ui.setChannel(0, "", true);
@@ -411,7 +411,7 @@ int main(int argc, char **argv)
     ui.openNode(0x11aa2201);
     pump(100);
     shot("08_node");
-    ui.showTraceRoute(0x11aa2201, "HOPT > OVL1 (11.0 dB) > RDGE (9.5 dB)\nback: RDGE > OVL1 > HOPT");
+    ui.showTraceRoute(0x11aa2201, "BLF1 > OVL1 (11.0 dB) > RDGE (9.5 dB)\nback: RDGE > OVL1 > BLF1");
     lv_obj_scroll_to_y(lv_obj_get_child(ui.nodeOv, 1), 300, LV_ANIM_OFF);
     shot("08b_node_scrolled");
     ui.closeNode();
@@ -477,17 +477,24 @@ int main(int argc, char **argv)
     printf("snapshot %zu bytes\n", js.size());
 
     const char *tn[4] = {"midnight", "daylight", "nightred", "amber"};
-    for (int t = 1; t < 4; t++) {
+    // every theme, the same five screens: the website's theme comparison uses these
+    for (int t = 0; t < 4; t++) {
         ui.setTheme(t);
         ui.selectTab(HopticsUI::T_HOME);
         pump(100);
         shot((std::string("20_home_") + tn[t]).c_str());
+        ui.selectTab(HopticsUI::T_LIVE);
+        pump(50);
+        shot((std::string("25_live_") + tn[t]).c_str());
         ui.selectTab(HopticsUI::T_STATS);
+        lv_obj_scroll_to_y(ui.pages[HopticsUI::T_STATS], 0, LV_ANIM_OFF);
+        pump(20);
         shot((std::string("21_stats_") + tn[t]).c_str());
         ui.selectTab(HopticsUI::T_MAP);
         pump(50);
         shot((std::string("22_map_") + tn[t]).c_str());
         ui.openChat(1);
+        lv_textarea_set_text(ui.chatInput, "");
         pump(50);
         shot((std::string("23_chat_") + tn[t]).c_str());
         ui.closeChat();

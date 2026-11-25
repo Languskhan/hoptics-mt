@@ -3175,10 +3175,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..eda025f
+index 0000000..6af5bb4
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,6847 @@
+@@ -0,0 +1,6858 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3263,7 +3263,7 @@ index 0000000..eda025f
 +            0xFF2020, 0xB8322A, 0xFF5A4A, 0xC8322A, 0x450909, 0xFF5050, 0xB03030, 0x000000);
 +        break;
 +    case 3: // Amber - phosphor terminal
-+        set(0x050400, 0x0A0800, 0x120E02, 0x1C1604, 0x3A2C08, 0xFFC24A, 0xC08A20, 0x7A5A14, 0xFFB000, 0x9BE15D, 0xFFD166,
++        set(0x050400, 0x0A0800, 0x120E02, 0x1C1604, 0x3A2C08, 0xFFC24A, 0xC08A20, 0x7A5A14, 0xFFB000, 0xE8DC6A, 0xFFD166,
 +            0xFF6B35, 0xE0A030, 0xFF8C42, 0xFFC857, 0x5A3E00, 0xFFE0A0, 0xD0A040, 0x000000);
 +        break;
 +    default: // Midnight
@@ -4905,12 +4905,12 @@ index 0000000..eda025f
 +    if (lastChUtil >= 0) {
 +        lv_label_set_text_fmt(homeChUtil, "%d%%", (int)lroundf(lastChUtil));
 +        lv_obj_set_style_text_color(homeChUtil, lastChUtil < 25 ? C_GREEN : lastChUtil < 50 ? C_AMBER : C_RED, 0);
-+        lv_label_set_text(homeChUtilSub, lastChUtil < 25 ? "quiet" : lastChUtil < 50 ? "busy" : "congested");
++        lv_label_set_text(homeChUtilSub, lastChUtil < 25 ? "quiet" : lastChUtil < 50 ? "busy" : "heavy");
 +    }
 +    if (lastAirUtil >= 0) {
 +        snprintf(buf, sizeof(buf), "%.1f%%", lastAirUtil);
 +        lv_label_set_text(homeAir, buf);
-+        lv_label_set_text(homeAirSub, "last hour");
++        lv_label_set_text(homeAirSub, "1 hr");
 +    }
 +    lv_label_set_text_fmt(homeRate, "%u", (unsigned)pktThisMinute);
 +
@@ -5030,6 +5030,7 @@ index 0000000..eda025f
 +        r.port = pill(r.row, "", C_BLUE);
 +        lv_obj_set_pos(r.port, 52, 22);
 +        r.meta = label(r.row, FSMALL, C_MUTED, "");
++        oneLine(r.meta);
 +        lv_obj_align_to(r.meta, r.port, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
 +        r.sig = label(r.row, &F12, C_GREEN, "");
 +        lv_obj_set_style_text_align(r.sig, LV_TEXT_ALIGN_RIGHT, 0);
@@ -5095,15 +5096,18 @@ index 0000000..eda025f
 +        lv_obj_set_style_bg_color(r.port, pc, 0);
 +
 +        agoString(le.time, ago, sizeof(ago));
-+        const char *dest = le.to == kBroadcast ? "all" : (le.to == myNode ? "me" : "dm");
++        // broadcasts are the norm, so only "to me" / "dm" are called out; keeps the line clear of the signal column
++        char dest[8] = "";
++        if (le.to != kBroadcast)
++            snprintf(dest, sizeof(dest), "%s - ", le.to == myNode ? "me" : "dm");
 +        if (le.viaMqtt)
-+            snprintf(buf, sizeof(buf), "via MQTT  -  %s  -  %s", dest, ago);
++            snprintf(buf, sizeof(buf), "MQTT - %s%s", dest, ago);
 +        else if (le.hops == 0)
-+            snprintf(buf, sizeof(buf), "direct  -  %s  -  %s", dest, ago);
++            snprintf(buf, sizeof(buf), "direct - %s%s", dest, ago);
 +        else if (le.hops > 0)
-+            snprintf(buf, sizeof(buf), "%d hop%s  -  %s  -  %s", le.hops, le.hops == 1 ? "" : "s", dest, ago);
++            snprintf(buf, sizeof(buf), "%d hop%s - %s%s", le.hops, le.hops == 1 ? "" : "s", dest, ago);
 +        else
-+            snprintf(buf, sizeof(buf), "%s  -  %s", dest, ago);
++            snprintf(buf, sizeof(buf), "%s%s", dest, ago);
 +        // MQTT rows get a violet edge; light theme outlines every row
 +        if (le.viaMqtt) {
 +            lv_obj_set_style_border_side(r.row, LV_BORDER_SIDE_LEFT, 0);
@@ -5117,7 +5121,14 @@ index 0000000..eda025f
 +            lv_obj_set_style_border_width(r.row, 0, 0);
 +        }
 +        lv_label_set_text(r.meta, buf);
++        lv_obj_update_layout(r.port);
 +        lv_obj_align_to(r.meta, r.port, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
++        {
++            // never run under the signal column on the right
++            int32_t x = lv_obj_get_x(r.port) + lv_obj_get_width(r.port) + 5;
++            int32_t room = (W() - 2 * PAD) - x - 66;
++            lv_obj_set_width(r.meta, room > 20 ? room : 20);
++        }
 +
 +        if (le.rssi != 0 && !le.viaMqtt) {
 +            snprintf(buf, sizeof(buf), "%d dBm\n%+.1f dB", le.rssi, le.snr);

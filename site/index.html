@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hoptics: touch firmware for mesh radios</title>
-<meta name="description" content="Hoptics is custom touch firmware for Meshtastic and MeshCore nodes: live traffic, maps, chat and stats on the device. Flash it from your browser.">
+<meta name="description" content="Hoptics is custom touch firmware for Meshtastic nodes: live traffic, map, chat, stats and sensor readings on the device. Four themes. Flash it from your browser.">
 <meta name="theme-color" content="#0a0f14">
 <meta property="og:title" content="Hoptics: touch firmware for mesh radios">
 <meta property="og:description" content="Live traffic, maps, chat and stats on the device itself. Pick your node and flash it from your browser.">
@@ -27,8 +27,9 @@
 <a class="brand" href="./"><img src="img/logo.svg" width="32" height="32" alt="">HOPTICS</a>
 <div class="links">
 <a href="#features">Features</a>
-<a href="#updates">Updates</a>
+<a href="#themes">Themes</a>
 <a href="#firmware">Firmware</a>
+<a href="#updates">Updates</a>
 <a href="flash.html">Flasher</a>
 <a href="https://github.com/Languskhan/hoptics-mt">GitHub</a>
 </div>
@@ -41,16 +42,17 @@
 <section class="hero">
 <div class="wrap hero-in">
 <div class="copy">
-<p class="kicker mono">MESHTASTIC · MESHCORE · TOUCH FIRMWARE<span class="betatag">BETA</span></p>
+<p class="kicker mono">TOUCH FIRMWARE FOR MESHTASTIC<span class="betatag">BETA</span></p>
 <h1>A better screen for your <span class="hl">mesh radio</span>.</h1>
-<p class="lead">Hoptics is custom touch firmware for mesh nodes. Live traffic, maps, chat and stats right on the device, no phone required. Pick your node, flash it from your browser, and you're on the air in about a minute.</p>
+<p class="lead">Hoptics replaces the stock screen on supported Meshtastic nodes with a full touch interface: live traffic, a map, chat, stats and sensor readings, all on the device with no phone needed. Pick your node and flash it from your browser.</p>
 <div class="row">
 <a class="btn big" href="flash.html">Flash a node</a>
 <a class="btn big ghost" href="#firmware">Download firmware</a>
 </div>
 <ul class="facts">
-<li>Free and open source</li>
-<li>Installs from Chrome or Edge</li>
+<li>Free and open source (GPL-3.0)</li>
+<li>Stock Meshtastic radio stack, unchanged</li>
+<li>Flashes from Chrome or Edge</li>
 <li id="ver">Built on Meshtastic</li>
 </ul>
 </div>
@@ -64,7 +66,7 @@
 <section class="block" id="features">
 <div class="wrap">
 <p class="eyebrow mono">WHAT YOU GET</p>
-<h2>Everything the mesh is doing, at a glance</h2>
+<h2>Everything the mesh is doing, on one screen</h2>
 <div class="grid features">
 <article class="feature">
 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
@@ -88,43 +90,42 @@
 </article>
 <article class="feature">
 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/></svg>
-<h3>Themes for any light</h3>
-<p>Dark, daylight for full sun, night-red to keep your night vision, and amber.</p>
+<h3>Four themes</h3>
+<p>Midnight, Daylight for full sun, Night-red to protect night vision, and Amber. <a href="#themes">Compare them</a>.</p>
 </article>
 <article class="feature">
-<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
-<h3>Easy to install</h3>
-<p>Flash from the browser, then a setup wizard asks for your region, name and theme. No phone app needed.</p>
+<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13.5V5a2 2 0 1 1 4 0v8.5a4 4 0 1 1-4 0zM12 10v7"/></svg>
+<h3>Environment sensors</h3>
+<p>Plug-in BME280 and GXHTC3 modules put temperature, humidity and pressure on Home, with a 24-hour graph.</p>
 </article>
 </div>
 </div>
 </section>
 
-<section class="block gallery-band" aria-labelledby="gallery-h">
+<section class="block" id="themes">
 <div class="wrap">
-<p class="eyebrow mono">ON THE DEVICE</p>
-<h2 id="gallery-h">Real screens, four themes</h2>
-<div class="gallery">
-<figure><img src="img/02_live.png" width="480" height="640" loading="lazy" alt="Live tab listing packets as they arrive"><figcaption>Live</figcaption></figure>
-<figure><img src="img/20_home_daylight.png" width="480" height="640" loading="lazy" alt="Home screen in the daylight theme"><figcaption>Daylight</figcaption></figure>
-<figure><img src="img/06_chat.png" width="480" height="640" loading="lazy" alt="Channel chat with message bubbles"><figcaption>Chat</figcaption></figure>
-<figure><img src="img/20_home_nightred.png" width="480" height="640" loading="lazy" alt="Home screen in the night-red theme"><figcaption>Night-red</figcaption></figure>
-<figure><img src="img/21_stats_amber.png" width="480" height="640" loading="lazy" alt="Stats screen in the amber theme"><figcaption>Amber</figcaption></figure>
-<figure><img src="img/08_node.png" width="480" height="640" loading="lazy" alt="Node detail with signal and position"><figcaption>Node detail</figcaption></figure>
+<p class="eyebrow mono">THEMES</p>
+<h2>Four themes, applied to every screen</h2>
+<p class="sub">Choose a theme in the setup wizard or in Settings. These are the same five screens in each theme, rendered from the firmware itself.</p>
+<div class="tabs" role="tablist" aria-label="Theme">
+<button type="button" role="tab" id="tab-midnight" class="tab" data-theme="midnight" aria-selected="true" aria-controls="theme-panel"><i class="sw" style="--a:#22d3ee;--b:#0a0f14"></i>Midnight</button>
+<button type="button" role="tab" id="tab-daylight" class="tab" data-theme="daylight" aria-selected="false" aria-controls="theme-panel" tabindex="-1"><i class="sw" style="--a:#1d6fd6;--b:#f4f6f8"></i>Daylight</button>
+<button type="button" role="tab" id="tab-nightred" class="tab" data-theme="nightred" aria-selected="false" aria-controls="theme-panel" tabindex="-1"><i class="sw" style="--a:#ef4444;--b:#000"></i>Night-red</button>
+<button type="button" role="tab" id="tab-amber" class="tab" data-theme="amber" aria-selected="false" aria-controls="theme-panel" tabindex="-1"><i class="sw" style="--a:#fbbf24;--b:#0d0a04"></i>Amber</button>
+</div>
+<div id="theme-panel" class="theme-panel" role="tabpanel" aria-labelledby="tab-midnight">
+<div class="theme-info">
+<h3 id="theme-name">Midnight</h3>
+<p id="theme-use">The default. Dark background with bright accents for indoor and evening use.</p>
+</div>
+<div class="screens">
+<figure><img data-screen="home" src="img/themes/home-midnight.png" width="480" height="640" loading="lazy" alt="Home screen, Midnight theme"><figcaption><b>Home</b>Nodes, channel use, airtime, sensors</figcaption></figure>
+<figure><img data-screen="live" src="img/themes/live-midnight.png" width="480" height="640" loading="lazy" alt="Live screen, Midnight theme"><figcaption><b>Live</b>Every packet as it's heard</figcaption></figure>
+<figure><img data-screen="map" src="img/themes/map-midnight.png" width="480" height="640" loading="lazy" alt="Map screen, Midnight theme"><figcaption><b>Map</b>Nodes, range rings, pings</figcaption></figure>
+<figure><img data-screen="stats" src="img/themes/stats-midnight.png" width="480" height="640" loading="lazy" alt="Stats screen, Midnight theme"><figcaption><b>Stats</b>Channel load and packet rate</figcaption></figure>
+<figure><img data-screen="chat" src="img/themes/chat-midnight.png" width="480" height="640" loading="lazy" alt="Chat screen, Midnight theme"><figcaption><b>Chat</b>Channels and direct messages</figcaption></figure>
 </div>
 </div>
-</section>
-
-<section class="block" id="updates">
-<div class="wrap">
-<div class="head">
-<div>
-<p class="eyebrow mono">UPDATES</p>
-<h2>What's happening</h2>
-</div>
-<a class="date" href="https://github.com/Languskhan/hoptics-mt/releases">Full release notes on GitHub →</a>
-</div>
-<div class="grid updates" id="update-list"></div>
 </div>
 </section>
 
@@ -150,6 +151,18 @@
 <div class="sb"><span class="num mono">03</span><h3>Set your region</h3><p>The setup wizard gets you on the air.</p></div>
 <a class="btn big" href="flash.html">Open the flasher</a>
 </div>
+</div>
+</section>
+<section class="block" id="updates">
+<div class="wrap">
+<div class="head">
+<div>
+<p class="eyebrow mono">UPDATES</p>
+<h2>What's happening</h2>
+</div>
+<a class="date" href="https://github.com/Languskhan/hoptics-mt/releases">Full release notes on GitHub →</a>
+</div>
+<div class="grid updates" id="update-list"></div>
 </div>
 </section>
 </main>
