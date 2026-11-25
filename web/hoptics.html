@@ -45,7 +45,34 @@ footer a:hover{text-decoration:underline}
 .envgrid .cap{font-size:11px;color:var(--muted);margin-top:2px}
 .envgrid h3{font-size:10px;letter-spacing:1px;color:var(--muted);margin:0 0 4px;font-weight:600}
 .envnote{color:var(--muted);font-size:12px;margin-top:8px}
-@media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}.envgrid{grid-template-columns:1fr}}
+/* reach logger */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chk{font-size:12px;border-radius:999px;padding:3px 10px;border:1px solid var(--line);color:var(--muted)}
+.chk.ok{color:var(--green);border-color:var(--green)}
+.chk.no{color:var(--amber);border-color:var(--amber)}
+.setup{font-size:12px;color:var(--muted);background:var(--card2);border-radius:10px;padding:8px 10px;margin:0 0 10px}
+.setup ol{margin:4px 0 0;padding-left:18px}
+.rtiles{grid-template-columns:repeat(4,1fr);margin-bottom:10px}
+.rrow{display:grid;grid-template-columns:64px minmax(0,1fr) 92px 150px 70px;gap:10px;align-items:center;padding:8px 6px;border-top:1px solid var(--line);cursor:pointer}
+.rrow:hover{background:var(--card2)}
+.rrow .when{font-size:12px;color:var(--muted)}
+.rrow .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .txt small{color:var(--muted);margin-right:6px}
+.rrow .n{font-size:20px;font-weight:700;color:var(--cyan);text-align:right}
+.rrow .n small{font-size:11px;font-weight:400;color:var(--muted);margin-left:3px}
+.rrow .far{font-size:12px;color:var(--muted);text-align:right}
+.hops{display:flex;gap:2px;align-items:flex-end;height:26px}
+.hops i{flex:1;background:var(--cyan);border-radius:2px 2px 0 0;min-height:2px;opacity:.9}
+.hops i.z{background:var(--line)}
+.rdet{padding:6px 6px 12px 80px;border-top:1px dashed var(--line);font-size:13px}
+.rdet .hb{display:grid;grid-template-columns:70px 1fr 34px;gap:8px;align-items:center;margin:3px 0;font-size:12px;color:var(--muted)}
+.rdet .hb div{height:10px;border-radius:3px;background:var(--card2)}
+.rdet .hb div i{display:block;height:100%;border-radius:3px;background:var(--cyan)}
+.gwline{margin:4px 0;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.gwline b{font-size:12px;color:var(--muted);width:66px}
+.empty{color:var(--muted);padding:14px 6px}
+@media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)}.envgrid{grid-template-columns:1fr}
+  .rrow{grid-template-columns:52px minmax(0,1fr) 70px}.rrow .hops,.rrow .far{display:none}.rdet{padding-left:6px}}
 </style>
 </head>
 <body>
@@ -78,6 +105,19 @@ footer a:hover{text-decoration:underline}
       <div><h3>PRESSURE</h3><canvas id="ecP" height="110"></canvas><div class="cap" id="ecPc"></div></div>
     </div>
     <div class="envnote" id="envNote"></div>
+  </section>
+  <section class="card wide" id="reachCard"><h2 style="display:flex;align-items:center;gap:8px">REACH LOGGER - how far your messages got<span class="grow"></span>
+      <button id="reachCsv" title="Download this log as a spreadsheet file">Export CSV</button> <button id="reachClear" title="Forget the history kept in this browser">Clear history</button></h2>
+    <div class="chips" id="reachChips"></div>
+    <div class="setup" id="reachSetup" hidden></div>
+    <div class="tiles rtiles">
+      <div class="tile" style="--c:var(--cyan)"><div class="k">MESSAGES LOGGED</div><div class="v" id="rN">-</div><div class="s" id="rNS"></div></div>
+      <div class="tile" style="--c:var(--green)"><div class="k">AVG GATEWAYS</div><div class="v" id="rAvg">-</div><div class="s">per message</div></div>
+      <div class="tile" style="--c:var(--violet)"><div class="k">FURTHEST</div><div class="v" id="rFar">-</div><div class="s" id="rFarS"></div></div>
+      <div class="tile" style="--c:var(--amber)"><div class="k">LAST MESSAGE</div><div class="v" id="rLast">-</div><div class="s" id="rLastS"></div></div>
+    </div>
+    <div id="reachList"></div>
+    <div class="sub" id="reachNote" style="margin-top:8px"></div>
   </section>
   <section class="card"><h2>LIVE MAP - pings show who is talking</h2><canvas id="map" height="360"></canvas><div class="sub" id="mapInfo"></div></section>
   <section class="card"><h2>LIVE TRAFFIC</h2>
@@ -131,7 +171,75 @@ function line(c, series, lo, hi, bars){
     g.beginPath(); let pen=false; arr.forEach((v,i)=>{ if(v===null){pen=false;return;} const x=i*w/(n-1), y=h-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo)*h; if(pen) g.lineTo(x,y); else {g.moveTo(x,y); pen=true;} }); g.stroke(); });
 }
 
-function render(){ if(!data) return; renderTiles(); renderEnv(); renderLive(); renderNodes(); renderCharts(); renderChat(); drawMap(); }
+function render(){ if(!data) return; renderTiles(); renderReach(); renderEnv(); renderLive(); renderNodes(); renderCharts(); renderChat(); drawMap(); }
+
+// ---------- reach logger ----------
+// The radio keeps only its latest few messages, so this page keeps a longer log in this browser (per radio),
+// merging each poll in by message id. Nothing leaves this browser.
+let reachLog=[], reachOpen=new Set(), reachKey=null;
+function reachLoad(){ try{ reachLog=JSON.parse(localStorage.getItem(reachKey)||"[]"); if(!Array.isArray(reachLog)) reachLog=[]; }catch(e){ reachLog=[]; } }
+function reachSave(){ try{ localStorage.setItem(reachKey, JSON.stringify(reachLog.slice(0,300))); }catch(e){} }
+function reachMerge(r){
+  if(!r||!r.msgs) return; const k="hopticsReach:"+data.me; if(k!==reachKey){ reachKey=k; reachLoad(); }
+  r.msgs.forEach(m=>{ const i=reachLog.findIndex(x=>x.id===m.id&&Math.abs(x.t-m.t)<600);
+    const keep=i>=0?reachLog[i]:null;
+    // the radio may restart: never let a fresh, smaller count overwrite what was already seen
+    if(keep && keep.gw>m.gw) return;
+    const e={id:m.id,t:m.t,last:m.last,ch:m.ch,text:m.text!==null?m.text:(keep?keep.text:null),gw:m.gw,unk:m.unk,self:m.self,byHop:m.byHop,gws:m.gws||(keep?keep.gws:null)};
+    if(i>=0) reachLog[i]=e; else reachLog.push(e); });
+  reachLog.sort((a,b)=>b.t-a.t); reachSave();
+}
+function maxHop(m){ for(let h=7;h>=0;h--) if(m.byHop[h]) return h; return -1; }
+function hopName(h){ return h<0?"unknown":h===0?"direct":h+(h===1?" hop":" hops"); }
+function renderReach(){
+  const r=data.reach; const card=$("reachCard"); if(!r){ card.hidden=true; return; } card.hidden=false;
+  reachMerge(r);
+  const s=r.setup, chips=$("reachChips"); chips.replaceChildren();
+  const items=[[s.wifi,"Wi-Fi connected","Wi-Fi not connected"],[s.up,"MQTT connected - "+s.server+(s.root?"  ("+s.root+")":""),s.enabled?"MQTT on, not connected":"MQTT is off"],
+    [s.okToMqtt,"Others may upload my messages","Others may not upload my messages"],[s.downlink,"Receiving MQTT on the primary channel","Not receiving MQTT on the primary channel"]];
+  let missing=0; items.forEach(([ok,y,n])=>{ chips.append(el("span",(ok?"\u2713 ":"\u2717 ")+(ok?y:n),"chk "+(ok?"ok":"no"))); if(!ok) missing++; });
+  const su=$("reachSetup"); su.hidden=!missing; su.replaceChildren();
+  if(missing){ su.append(el("b","To turn on the reach check, on the radio open Settings > MQTT:"));
+    const ol=el("ol"); ["Turn Wi-Fi on (Settings > Wi-Fi).","Enter your local mesh group's MQTT server, username, password and root topic. Leave the server blank for the public Meshtastic server (root msh/US).",
+      "Turn on 'Others may upload my messages'. Gateways on public servers drop messages from radios that don't allow it.",
+      "Turn on 'Receive MQTT on the primary channel'. That is how copies of your messages come back.","Save. These checks turn green once it works, then send a message from the radio."].forEach(t=>ol.append(el("li",t)));
+    su.append(ol); }
+  const L=reachLog, withGw=L.filter(m=>m.gw>0);
+  $("rN").textContent=L.length; $("rNS").textContent=withGw.length+" reached a gateway";
+  $("rAvg").textContent=L.length? (L.reduce((a,m)=>a+m.gw,0)/L.length).toFixed(1) : "-";
+  const far=L.reduce((a,m)=>Math.max(a,maxHop(m)),-1); $("rFar").textContent=far<0?"-":far; $("rFarS").textContent=far<0?"":(far===1?"hop":"hops")+" out";
+  const last=L[0]; $("rLast").textContent=last?last.gw:"-"; $("rLastS").textContent=last?"gateways  -  "+ago(last.t)+" ago":"";
+  const box=$("reachList"); box.replaceChildren();
+  if(!L.length){ box.append(el("div","No messages logged yet. Send a channel message from the radio while it is connected; gateways that upload it show up here within a few seconds.","empty")); }
+  L.slice(0,100).forEach(m=>{
+    const row=el("div",null,"rrow"); row.title="Click for details";
+    row.append(el("div",ago(m.t),"when"));
+    const tx=el("div",null,"txt"); tx.append(el("small",m.ch? "#"+m.ch : "DM"), document.createTextNode(m.text!==null? m.text : m.ch? "(text hidden - turn on Web chat on the radio to show it)" : "(direct message - text never shown)"));
+    row.append(tx);
+    const n=el("div",m.gw,"n"); n.append(el("small","gw")); row.append(n);
+    const most=Math.max(1,...m.byHop), hb=el("div",null,"hops"); hb.title="gateways by hops: direct, 1 ... 7";
+    m.byHop.forEach(v=>{ const i=el("i"); if(!v) i.className="z"; i.style.height=(v?Math.max(12,v*100/most):8)+"%"; hb.append(i); }); row.append(hb);
+    const fh=maxHop(m); row.append(el("div",fh<0?(m.self?"own gateway":"-"):hopName(fh),"far"));
+    row.onclick=()=>{ reachOpen.has(m.id)?reachOpen.delete(m.id):reachOpen.add(m.id); renderReach(); };
+    box.append(row);
+    if(reachOpen.has(m.id)){
+      const d=el("div",null,"rdet");
+      d.append(el("div","Sent "+(data.clock? new Date(m.t*1000).toLocaleString() : ago(m.t)+" ago")+(m.last?"  -  last copy "+ago(m.last)+" ago":"")+(m.self?"  -  also uploaded by this radio":"")));
+      const top=Math.max(3,fh); for(let h=0;h<=top;h++){ const b=el("div",null,"hb"); const bar=el("div"); const f=el("i"); f.style.width=(m.byHop[h]*100/most)+"%"; bar.append(f); b.append(el("span",hopName(h)),bar,el("span",m.byHop[h])); d.append(b); }
+      if(m.unk) d.append(el("div",m.unk+" gateway"+(m.unk===1?"":"s")+" on old firmware (hops unknown)","sub"));
+      if(m.gws&&m.gws.length){ [0,1,2,3,4,5,6,7,null].forEach(h=>{ const g=m.gws.filter(x=>x.hops===h); if(!g.length) return;
+          const ln=el("div",null,"gwline"); ln.append(el("b",hopName(h===null?-1:h))); g.forEach(x=>{ const b=badge(x.id); b.textContent=x.short; b.title=x.id; ln.append(b); }); d.append(ln); });
+        if(m.gw>m.gws.length) d.append(el("div","+"+(m.gw-m.gws.length)+" more","sub")); }
+      else if(!r.full && m.gw) d.append(el("div","Gateway names are kept on the V4-R8, T-Deck Plus and ThinkNode M9. The V4 keeps the counts only.","sub"));
+      box.append(d); }
+  });
+  $("reachNote").textContent="Direct = a gateway heard your radio itself; each hop is one relay in between. Only gateways that upload to "+s.server+" are counted. History is kept in this browser (up to 300 messages).";
+}
+$("reachCsv").onclick=()=>{ const q=v=>'"'+String(v===null||v===undefined?"":v).replace(/"/g,'""')+'"';
+  const rows=[["sent","channel","text","gateways","direct","1 hop","2 hops","3 hops","4 hops","5 hops","6 hops","7 hops","unknown hops","own gateway","gateway ids"].map(q).join(",")];
+  reachLog.forEach(m=>rows.push([new Date(m.t*1000).toISOString(),m.ch||"DM",m.text,m.gw,...m.byHop,m.unk,m.self?"yes":"no",(m.gws||[]).map(g=>g.id+":"+(g.hops===null?"?":g.hops)).join(" ")].map(q).join(",")));
+  const a=el("a"); a.href=URL.createObjectURL(new Blob([rows.join("\r\n")],{type:"text/csv"})); a.download="hoptics-reach.csv"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000); };
+$("reachClear").onclick=()=>{ if(!reachKey) return; if(!confirm("Forget the reach history kept in this browser? The radio's own latest messages come back on the next update.")) return; reachLog=[]; reachSave(); renderReach(); };
 
 // environment: units follow the radio's screen unless switched on this page (remembered in this browser)
 let envUnits=null; try{ envUnits=localStorage.getItem("hopticsUnits"); }catch(e){}
