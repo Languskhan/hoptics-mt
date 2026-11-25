@@ -544,10 +544,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..75f62b4
+index 0000000..2d972fc
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,560 @@
+@@ -0,0 +1,563 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -858,6 +858,8 @@ index 0000000..75f62b4
 +    void fillEnvChart(lv_obj_t *chart, lv_chart_series_t *ser, int which, lv_obj_t *caption);
 +    const char *pressTrend(void) const;
 +    std::string envLine(const Node &n) const;
++    void refreshEnvCorr(void);
++    void stepEnvCorr(int dir);
 +    void lookupCity(Node &n);
 +
 +    void selectTab(Tab t);
@@ -971,6 +973,7 @@ index 0000000..75f62b4
 +    bool envShare = false, envCfgKnown = false, envRadioF = false;
 +    uint32_t envShareSecs = 0;
 +    int8_t envUnitF = -1, envUnitInHg = -1; // -1 = not chosen yet (follows the region)
++    int16_t envTempOff = 0;                 // temperature correction, tenths of a degree C (the firmware applies it)
 +    uint8_t envDirty = 0xff; // bit 0: Home chart, bit 1: detail page
 +    bool envUnitsLoaded = false;
 +
@@ -1089,7 +1092,7 @@ index 0000000..75f62b4
 +    lv_chart_series_t *envOvSer[3] = {nullptr};
 +    lv_obj_t *nodeOvEnv = nullptr, *nodeOvEnvText = nullptr;
 +    lv_obj_t *setEnvTempDd = nullptr, *setEnvPressDd = nullptr, *setEnvShareSw = nullptr, *setEnvEveryDd = nullptr,
-+             *setEnvNote = nullptr;
++             *setEnvNote = nullptr, *setEnvCorr = nullptr, *setEnvCorrNote = nullptr;
 +
 +    // location / city locator
 +    lv_obj_t *homeLoc = nullptr, *homeLocCity = nullptr, *homeLocSub = nullptr;
@@ -2811,10 +2814,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..1a2a783
+index 0000000..0be1aa3
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,5557 @@
+@@ -0,0 +1,5655 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3210,6 +3213,34 @@ index 0000000..1a2a783
 +#else
 +    (void)f;
 +    (void)inhg;
++#endif
++}
++
++// temperature correction (tenths of a degree C): the firmware reads the same key when it reads the sensors
++int16_t loadEnvTempOff(void)
++{
++    int16_t v = 0;
++#if defined(ARDUINO_ARCH_ESP32)
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READONLY, &h) == ESP_OK) {
++        nvs_get_i16(h, "envtoff", &v);
++        nvs_close(h);
++    }
++#endif
++    return v;
++}
++
++void saveEnvTempOff(int16_t v)
++{
++#if defined(ARDUINO_ARCH_ESP32)
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READWRITE, &h) == ESP_OK) {
++        nvs_set_i16(h, "envtoff", v);
++        nvs_commit(h);
++        nvs_close(h);
++    }
++#else
++    (void)v;
 +#endif
 +}
 +
@@ -3873,6 +3904,7 @@ index 0000000..1a2a783
 +    applyPalette(themeIdx);
 +    if (!envUnitsLoaded) {
 +        loadEnvUnits(envUnitF, envUnitInHg);
++        envTempOff = loadEnvTempOff();
 +        envUnitsLoaded = true;
 +    }
 +    mainScreen = lv_obj_create(NULL);
@@ -5651,6 +5683,55 @@ index 0000000..1a2a783
 +    lv_chart_refresh(chart);
 +}
 +
++// Settings > SENSORS temperature correction: shown in the chosen unit, whole degrees F or half degrees C
++void HopticsUI::refreshEnvCorr(void)
++{
++    if (!setEnvCorr)
++        return;
++    char b[24], now[24];
++    if (tempF())
++        snprintf(b, sizeof(b), "%+ld\xC2\xB0" "F", lroundf(envTempOff * 9.0f / 50.0f));
++    else
++        snprintf(b, sizeof(b), "%+.1f\xC2\xB0" "C", envTempOff / 10.0f);
++    lv_label_set_text(setEnvCorr, envTempOff ? b : "None");
++    fmtTemp(now, sizeof(now), envNow.temp);
++    lv_label_set_text_fmt(setEnvCorrNote,
++                          "Reads %s now. Tap - or + until it matches a thermometer in the room: the sensors sit inside "
++                          "the case and read warm. Humidity is corrected to match.",
++                          now);
++}
++
++void HopticsUI::stepEnvCorr(int dir)
++{
++    int16_t old = envTempOff;
++    if (tempF()) {
++        long f = lroundf(envTempOff * 9.0f / 50.0f) + dir; // whole degrees F
++        envTempOff = (int16_t)lroundf(f * 50.0f / 9.0f);
++    } else
++        envTempOff = (int16_t)(envTempOff + dir * 5); // half degrees C
++    envTempOff = std::max<int16_t>(-250, std::min<int16_t>(100, envTempOff));
++    if (envTempOff == old)
++        return;
++    saveEnvTempOff(envTempOff);
++    // show it right away; the next reading from the radio (within a minute) already has it applied
++    float d = (envTempOff - old) / 10.0f;
++    if (!std::isnan(envNow.temp)) {
++        float raw = envNow.temp, t = raw + d;
++        if (!std::isnan(envNow.hum)) {
++            auto es = [](float c) { return 6.112f * expf(17.62f * c / (243.12f + c)); };
++            envNow.hum = std::min(100.0f, envNow.hum * es(raw) / es(t));
++        }
++        envNow.temp = t;
++        if (Node *me = nodePtr(myNode)) {
++            me->envTemp = envNow.temp;
++            me->envHum = envNow.hum;
++        }
++    }
++    envDirty = 0xff;
++    dirtyHome = dirtyNodeOv = true;
++    refreshEnvCorr();
++}
++
 +std::string HopticsUI::envLine(const Node &n) const
 +{
 +    char b[32];
@@ -6030,6 +6111,24 @@ index 0000000..1a2a783
 +    lv_obj_set_width(setEnvPressDd, LV_PCT(100));
 +    lv_dropdown_set_options(setEnvPressDd, "inHg  inches of mercury\nhPa  hectopascals (mbar)");
 +    styleDropdown(setEnvPressDd);
++    r = settingsRow(cs, "Temperature correction");
++    {
++        lv_obj_t *cr = plain(r);
++        lv_obj_set_size(cr, LV_PCT(100), 36);
++        row(cr, 6);
++        lv_obj_t *minus = flatButton(cr, LV_SYMBOL_MINUS, C_CYAN, 52, 34);
++        setEnvCorr = label(cr, &F16, C_TEXT, "None");
++        lv_obj_set_flex_grow(setEnvCorr, 1);
++        lv_obj_set_style_text_align(setEnvCorr, LV_TEXT_ALIGN_CENTER, 0);
++        lv_obj_t *plus = flatButton(cr, LV_SYMBOL_PLUS, C_CYAN, 52, 34);
++        lv_obj_add_event_cb(
++            minus, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->stepEnvCorr(-1); }, LV_EVENT_CLICKED, this);
++        lv_obj_add_event_cb(
++            plus, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->stepEnvCorr(1); }, LV_EVENT_CLICKED, this);
++        setEnvCorrNote = label(r, FSMALL, C_DIM, "");
++        lv_obj_set_width(setEnvCorrNote, LV_PCT(100));
++        lv_label_set_long_mode(setEnvCorrNote, LV_LABEL_LONG_MODE_WRAP);
++    }
 +    for (lv_obj_t *dd : {setEnvTempDd, setEnvPressDd})
 +        lv_obj_add_event_cb(
 +            dd,
@@ -6040,6 +6139,7 @@ index 0000000..1a2a783
 +                ui->envUnitF = lv_dropdown_get_selected(ui->setEnvTempDd) == 0 ? 1 : 0;
 +                ui->envUnitInHg = lv_dropdown_get_selected(ui->setEnvPressDd) == 0 ? 1 : 0;
 +                saveEnvUnits(ui->envUnitF, ui->envUnitInHg);
++                ui->refreshEnvCorr();
 +                ui->envDirty = 0xff;
 +                ui->dirtyHome = ui->dirtyNodeOv = true;
 +                ui->showToast(ui->envUnitF ? (ui->envUnitInHg ? "Units: \xC2\xB0" "F and inHg" : "Units: \xC2\xB0" "F and hPa")
@@ -6510,6 +6610,7 @@ index 0000000..1a2a783
 +    else
 +        lv_obj_remove_state(setMapSw, LV_STATE_CHECKED);
 +    lv_dropdown_set_selected(setEnvTempDd, tempF() ? 0 : 1);
++    refreshEnvCorr();
 +    lv_dropdown_set_selected(setEnvPressDd, pressInHg() ? 0 : 1);
 +    if (envShare)
 +        lv_obj_add_state(setEnvShareSw, LV_STATE_CHECKED);

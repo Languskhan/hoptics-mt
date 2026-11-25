@@ -625,7 +625,7 @@ index 47d2913..559415b 100644
      }
  #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_AIR_QUALITY_SENSOR
 diff --git a/src/modules/Telemetry/EnvironmentTelemetry.cpp b/src/modules/Telemetry/EnvironmentTelemetry.cpp
-index b1f6498..5c2c508 100644
+index b1f6498..5bdadb2 100644
 --- a/src/modules/Telemetry/EnvironmentTelemetry.cpp
 +++ b/src/modules/Telemetry/EnvironmentTelemetry.cpp
 @@ -277,7 +277,7 @@ void EnvironmentTelemetryModule::refreshDisplayedMeasurement()
@@ -673,7 +673,52 @@ index b1f6498..5c2c508 100644
               !Throttle::isWithinTimespanMs(
                   lastTelemetry, Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.environment_update_interval,
                                                                          default_telemetry_broadcast_interval_secs, numOnlineNodes,
-@@ -811,7 +811,8 @@ meshtastic_MeshPacket *EnvironmentTelemetryModule::allocReply()
+@@ -724,6 +724,33 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
+     return false; // Let others look at this message also if they want
+ }
+ 
++#if defined(HOPTICS_UI) && defined(ARCH_ESP32)
++#include "nvs.h"
++#include <math.h>
++// Hoptics MT: the kits' sensors sit inside the case and read warm. Settings > SENSORS on the screen
++// stores a correction (tenths of a degree C) in NVS "hoptics"/"envtoff". Apply it to the merged
++// reading, and work out relative humidity again for the corrected temperature (the amount of
++// moisture in the air is the same; warm air just makes it look drier).
++static void hopticsCorrectTemperature(meshtastic_EnvironmentMetrics &em)
++{
++    int16_t off = 0;
++    nvs_handle_t h;
++    if (nvs_open("hoptics", NVS_READONLY, &h) != ESP_OK)
++        return;
++    nvs_get_i16(h, "envtoff", &off);
++    nvs_close(h);
++    if (off == 0 || !em.has_temperature)
++        return;
++    const float raw = em.temperature, t = raw + off / 10.0f;
++    if (em.has_relative_humidity && em.relative_humidity > 0) {
++        auto es = [](float c) { return 6.112f * expf(17.62f * c / (243.12f + c)); }; // saturation vapour pressure
++        float rh = em.relative_humidity * es(raw) / es(t);
++        em.relative_humidity = rh > 100.0f ? 100.0f : rh;
++    }
++    em.temperature = t;
++}
++#endif
++
+ bool EnvironmentTelemetryModule::getEnvironmentTelemetry(meshtastic_Telemetry *m)
+ {
+     bool valid = false;
+@@ -788,6 +815,10 @@ bool EnvironmentTelemetryModule::getEnvironmentTelemetry(meshtastic_Telemetry *m
+         valid = valid || get_metrics;
+         hasSensor = true;
+     }
++#endif
++#if defined(HOPTICS_UI) && defined(ARCH_ESP32)
++    if (valid)
++        hopticsCorrectTemperature(m->variant.environment_metrics);
+ #endif
+     return valid && hasSensor;
+ }
+@@ -811,7 +842,8 @@ meshtastic_MeshPacket *EnvironmentTelemetryModule::allocReply()
              return NULL;
          }
          // Check for a request for environment metrics
