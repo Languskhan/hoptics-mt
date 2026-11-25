@@ -56,10 +56,12 @@ jobs:
           - board: lilygo-t-deck-plus-mt # keyboard, trackball, touch, GPS, 320x240 landscape (8 MB PSRAM)
             env: t-deck-plus-tft
             flags: "-DHOPTICS_HISTORY=120 -DHOPTICS_SIGNAL_HISTORY=120 -DHOPTICS_NODE_ROWS=80 -DHOPTICS_MAX_NODES=500"
+            landscape: true
             untested: true
           - board: elecrow-thinknode-m9-mt # keyboard (no touch), LR1110, GPS, 320x240 landscape (8 MB PSRAM)
             env: thinknode_m9-tft
             flags: "-DHOPTICS_HISTORY=120 -DHOPTICS_SIGNAL_HISTORY=120 -DHOPTICS_NODE_ROWS=80 -DHOPTICS_MAX_NODES=500"
+            landscape: true
             untested: true
     steps:
       - uses: actions/checkout@v4
@@ -94,7 +96,9 @@ jobs:
           python tools/embed_web.py web/hoptics.html fw/src/mesh/http/HopticsWebPage.h
           # boot-screen art: three original designs from tools/make_boot_bg.py, shown in rotation (one per boot)
           pip install --quiet pillow
-          python tools/png_to_lvgl.py device-ui/include/graphics/view/TFT/HopticsBootBg.h assets/boot_bg_ridgelines.png assets/boot_bg_constellation.png assets/boot_bg_aurora.png
+          # (landscape 320x240 boards get their own versions: the UI only shows art that matches the panel size)
+          ART="${{ matrix.landscape && '_320x240' || '' }}"
+          python tools/png_to_lvgl.py device-ui/include/graphics/view/TFT/HopticsBootBg.h assets/boot_bg_ridgelines$ART.png assets/boot_bg_constellation$ART.png assets/boot_bg_aurora$ART.png
           # offline city locator: GeoNames towns >= 5000 people (CC BY 4.0). Build still works without it.
           if curl -fsSL --retry 3 -o cities5000.zip https://download.geonames.org/export/dump/cities5000.zip; then
             python tools/build_cities.py cities5000.zip device-ui/include/graphics/view/TFT/HopticsCities.h
