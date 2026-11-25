@@ -820,22 +820,23 @@ index 44d2400..c4311cb 100644
      static constexpr uint16_t nodeInfoTargetEntries() { return kNodeInfoCacheEntries; }
  
 diff --git a/src/mqtt/MQTT.cpp b/src/mqtt/MQTT.cpp
-index ea1d5dd..bded321 100644
+index ea1d5dd..bbbb272 100644
 --- a/src/mqtt/MQTT.cpp
 +++ b/src/mqtt/MQTT.cpp
-@@ -89,6 +89,11 @@ inline bool shouldDropMqttDownlink(const meshtastic_MeshPacket &packet)
-     return false;
- }
+@@ -50,6 +50,12 @@
+ 
+ MQTT *mqtt;
  
 +#if defined(HOPTICS_UI)
-+// Hoptics MT reach check (device-ui HopticsReach.cpp): copies of our own messages uploaded by other gateways
++// Hoptics MT reach check (device-ui HopticsReach.cpp): copies of our own messages uploaded by other gateways.
++// Declared here, outside the anonymous namespace below, so it links to the device-ui function.
 +void hoptics_mqtt_echo(uint32_t packetId, const char *gatewayId, uint8_t hopStart, uint8_t hopLimit, bool self);
 +#endif
 +
- inline void onReceiveProto(char *topic, byte *payload, size_t length)
+ namespace
  {
-     const DecodedServiceEnvelope e(payload, length);
-@@ -119,6 +124,12 @@ inline void onReceiveProto(char *topic, byte *payload, size_t length)
+ constexpr int reconnectMax = 5;
+@@ -119,6 +125,12 @@ inline void onReceiveProto(char *topic, byte *payload, size_t length)
      }
      // Generate node ID from nodenum for comparison
      std::string nodeId = nodeDB->getNodeId();
