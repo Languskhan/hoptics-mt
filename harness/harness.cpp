@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 
     const uint32_t me = 0xa1b2c3d4;
     ui.setMyNode(me);
-    ui.upsertNode(me, 0, now, "HOPT", "Hoptics V4 Kit", 0, true, false, 110);
+    ui.upsertNode(me, 0, now, "BLF1", "Bluffs V4 Kit", 0, true, false, 110);
     ui.updatePosition(me, 386950000, -1212650000, 70);
     ui.updateMetrics(me, 87, 4.02f, 14.6f, 2.3f);
     ui.setChannel(0, "", true);
@@ -305,7 +305,7 @@ int main(int argc, char **argv)
     ui.openNode(0x11aa2201);
     pump(100);
     shot("08_node");
-    ui.showTraceRoute(0x11aa2201, "HOPT > OVL1 (11.0 dB) > RDGE (9.5 dB)\nback: RDGE > OVL1 > HOPT");
+    ui.showTraceRoute(0x11aa2201, "BLF1 > OVL1 (11.0 dB) > RDGE (9.5 dB)\nback: RDGE > OVL1 > BLF1");
     lv_obj_scroll_to_y(lv_obj_get_child(ui.nodeOv, 1), 300, LV_ANIM_OFF);
     shot("08b_node_scrolled");
     ui.closeNode();
