@@ -544,10 +544,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..2d972fc
+index 0000000..2175a46
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,563 @@
+@@ -0,0 +1,566 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch touch UI for Meshtastic on 240x320 TFT boards
@@ -596,6 +596,9 @@ index 0000000..2d972fc
 +#endif
 +#ifndef HOPTICS_ENV_HISTORY
 +#define HOPTICS_ENV_HISTORY 288 // own sensor history: 5-minute averages, 24 h
++#endif
++#ifndef HOPTICS_SUPPORT_URL
++#define HOPTICS_SUPPORT_URL "https://buymeacoffee.com/Bluffs" // tips for the author (Settings > SUPPORT, web page)
 +#endif
 +#ifndef HOPTICS_NAME
 +#define HOPTICS_NAME "HOPTICS MT"
@@ -2814,10 +2817,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..0be1aa3
+index 0000000..d18a80e
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,5655 @@
+@@ -0,0 +1,5681 @@
 +/**
 + * Hoptics MT - touch UI for Meshtastic on 240x320 TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -6573,6 +6576,32 @@ index 0000000..0be1aa3
 +    lv_obj_t *repBtn = flatButton(cdv, LV_SYMBOL_WARNING " Report a problem", C_CYAN, W() - 2 * PAD - 16, 36);
 +    lv_obj_add_event_cb(
 +        repBtn, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openReport(false); }, LV_EVENT_CLICKED, this);
++
++    // support the project: scan with a phone (the radio has no browser)
++    {
++        lv_obj_t *csu = card(body, "SUPPORT THE PROJECT");
++        lv_obj_t *sr = plain(csu);
++        lv_obj_set_size(sr, LV_PCT(100), LV_SIZE_CONTENT);
++        row(sr, 10);
++        lv_obj_t *qb = plain(sr);
++        lv_obj_set_size(qb, 96, 96);
++        lv_obj_set_style_bg_color(qb, lv_color_white(), 0);
++        lv_obj_set_style_bg_opa(qb, LV_OPA_COVER, 0);
++        lv_obj_set_style_radius(qb, 6, 0);
++        lv_obj_t *qr = lv_qrcode_create(qb);
++        lv_qrcode_set_size(qr, 84);
++        lv_qrcode_set_dark_color(qr, lv_color_black());
++        lv_qrcode_set_light_color(qr, lv_color_white());
++        lv_qrcode_update(qr, HOPTICS_SUPPORT_URL, (uint32_t)strlen(HOPTICS_SUPPORT_URL));
++        lv_obj_center(qr);
++        lv_obj_t *st = label(sr, &F12, C_TEXT,
++                             "Hoptics MT is free. If it's useful to you, you can buy me a coffee: scan the code with "
++                             "your phone.");
++        lv_obj_set_flex_grow(st, 1);
++        lv_label_set_long_mode(st, LV_LABEL_LONG_MODE_WRAP);
++        lv_obj_t *su = label(csu, FSMALL, C_MUTED, "buymeacoffee.com/Bluffs");
++        lv_obj_set_width(su, LV_PCT(100));
++    }
 +
 +    lv_obj_t *about = label(body, FSMALL, C_DIM, HOPTICS_NAME " v" HOPTICS_VERSION "  -  GPL-3.0\nBuilt on Meshtastic device-ui");
 +    lv_obj_set_width(about, LV_PCT(100));
