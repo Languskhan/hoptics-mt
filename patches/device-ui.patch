@@ -737,10 +737,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..1950e62
+index 0000000..4367073
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,658 @@
+@@ -0,0 +1,679 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -942,6 +942,14 @@ index 0000000..1950e62
 +        std::function<void(bool enabled, const char *server, const char *user, const char *pass, const char *root,
 +                           bool okToMqtt, bool downlink)>
 +            setMqtt;
++        // the advanced settings, by key (see HopticsView::advGet): false = not known yet, the row stays hidden
++        std::function<bool(const char *key, int32_t &value)> advGet;
++        // stage one change; nothing is sent until advApply
++        std::function<bool(const char *key, int32_t value)> advSet;
++        // send every staged change as one edit: the radio saves once and restarts. Returns how many configs went.
++        std::function<int(void)> advApply;
++        // forget the staged changes
++        std::function<void(void)> advDiscard;
 +    };
 +
 +    enum Theme { TH_MIDNIGHT = 0, TH_DAYLIGHT, TH_NIGHT_RED, TH_AMBER, TH_COUNT };
@@ -1357,6 +1365,19 @@ index 0000000..1950e62
 +             *setInfo = nullptr, *setShutdownBtn = nullptr, *setThemeDd = nullptr, *setBtPin = nullptr, *setWebChatSw = nullptr,
 +             *setMapSw = nullptr, *setMapInfo = nullptr;
 +    bool settingsLoading = false;
++    // advanced settings: one row per key (cbs.advGet / advSet), saved together with one restart
++    struct AdvRow {
++        const char *key = nullptr;
++        const int32_t *vals = nullptr; // dropdown values; nullptr = a switch
++        int n = 0;
++        lv_obj_t *row = nullptr, *ctl = nullptr;
++    };
++    std::vector<AdvRow> advRows;
++    lv_obj_t *advSave = nullptr, *advNote = nullptr;
++    bool advDirty = false;
++    void addAdv(lv_obj_t *parent, const char *key, const char *text, const char *opts, const int32_t *vals, int n,
++                const char *help = nullptr);
++    void refreshAdvanced(void);
 +
 +    // environment card on Home, its detail page, the node page card and the Settings card
 +    lv_obj_t *homeEnv = nullptr, *homeEnvTemp = nullptr, *homeEnvUnit = nullptr, *homeEnvHum = nullptr, *homeEnvPress = nullptr,
@@ -1401,10 +1422,10 @@ index 0000000..1950e62
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..5cd2cb5
+index 0000000..d55c078
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,135 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1451,6 +1472,11 @@ index 0000000..5cd2cb5
 +    void updateMQTTModule(const meshtastic_ModuleConfig_MQTTConfig &cfg) override;
 +    void updateExtNotificationModule(const meshtastic_ModuleConfig_ExternalNotificationConfig &cfg) override;
 +    void updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg) override;
++    void updatePowerConfig(const meshtastic_Config_PowerConfig &cfg) override;
++    void updateDisplayConfig(const meshtastic_Config_DisplayConfig &cfg) override;
++    void updateNeighborInfoModule(const meshtastic_ModuleConfig_NeighborInfoConfig &cfg) override;
++    void updateRangeTestModule(const meshtastic_ModuleConfig_RangeTestConfig &cfg) override;
++    void updateStoreForwardModule(const meshtastic_ModuleConfig_StoreForwardConfig &cfg) override;
 +    void updateRingtone(const char rtttl[231]) override;
 +
 +    void packetReceived(const meshtastic_MeshPacket &p) override;
@@ -1505,6 +1531,30 @@ index 0000000..5cd2cb5
 +    bool haveExtNotif = false;
 +    meshtastic_ModuleConfig_TelemetryConfig telemetry{};
 +    bool haveTelemetry = false;
++    // the rest of the configs, for the advanced settings
++    meshtastic_Config_PowerConfig power{};
++    meshtastic_Config_DisplayConfig display{};
++    meshtastic_ModuleConfig_NeighborInfoConfig neighbor{};
++    meshtastic_ModuleConfig_RangeTestConfig rangeTest{};
++    meshtastic_ModuleConfig_StoreForwardConfig storeFwd{};
++    bool havePower = false, haveDisplay = false, haveNeighbor = false, haveRange = false, haveStore = false;
++    // advanced settings staged on the screen, sent together by advApply (one edit, one save, one restart)
++    struct Staged {
++        meshtastic_Config_LoRaConfig lora;
++        meshtastic_Config_DeviceConfig device;
++        meshtastic_Config_PositionConfig position;
++        meshtastic_Config_PowerConfig power;
++        meshtastic_Config_BluetoothConfig bluetooth;
++        meshtastic_Config_DisplayConfig display;
++        meshtastic_ModuleConfig_NeighborInfoConfig neighbor;
++        meshtastic_ModuleConfig_RangeTestConfig rangeTest;
++        meshtastic_ModuleConfig_StoreForwardConfig storeFwd;
++        meshtastic_ModuleConfig_TelemetryConfig telemetry;
++        uint32_t dirty = 0;
++    } stg{};
++    bool advGet(const char *key, int32_t &value);
++    bool advSet(const char *key, int32_t value);
++    int advApply(void);
 +    std::unordered_map<uint32_t, uint8_t> nodeChannels;
 +    std::unordered_map<uint32_t, bool> nodeHasKey;
 +
@@ -3436,10 +3486,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..b6059d2
+index 0000000..9820ba4
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7346 @@
+@@ -0,0 +1,7555 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -7134,6 +7184,8 @@ index 0000000..b6059d2
 +// ================================================================= SETTINGS
 +void HopticsUI::buildSettingsOverlay(void)
 +{
++    advRows.clear(); // rebuilt with the screens
++    advSave = advNote = nullptr;
 +    setOv = overlayPanel("Settings", nullptr, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeSettings(); });
 +    lv_obj_t *body = plain(setOv);
 +    lv_obj_set_width(body, LV_PCT(100));
@@ -7852,6 +7904,103 @@ index 0000000..b6059d2
 +    lv_label_set_long_mode(wh, LV_LABEL_LONG_MODE_WRAP);
 +
 +    // device
++    // ---------------------------------------------------------------- advanced: the rest of Meshtastic's settings,
++    // staged as they are changed and sent together (one save, one restart) with the button at the end
++    {
++        lv_obj_t *ah = label(body, &F12, C_MUTED,
++                             "MORE SETTINGS  -  change any of these, then press \\"Save and restart\\" at the end. Nothing is sent "
++                             "before that.");
++        lv_obj_set_width(ah, LV_PCT(100));
++        lv_label_set_long_mode(ah, LV_LABEL_LONG_MODE_WRAP);
++
++        lv_obj_t *ar = card(body, "RADIO  -  MORE");
++        static const int32_t TXP[] = {0, 5, 10, 14, 17, 20, 22};
++        addAdv(ar, "tx_power", "Transmit power", "Highest allowed\\n5 dBm\\n10 dBm\\n14 dBm\\n17 dBm\\n20 dBm\\n22 dBm", TXP, 7);
++        static const int32_t HOPS[] = {1, 2, 3, 4, 5, 6, 7};
++        addAdv(ar, "hop_limit", "Hop limit (how far my messages go)", "1\\n2\\n3 (default)\\n4\\n5\\n6\\n7", HOPS, 7,
++               "Each hop is one more radio relaying it. More hops reach further but add traffic for everyone.");
++        static int32_t SLOTS[105];
++        static std::string slotOpts;
++        if (slotOpts.empty())
++            for (int i = 0; i <= 104; i++) {
++                SLOTS[i] = i;
++                slotOpts += i ? ("\\nSlot " + std::to_string(i)) : std::string("From the channel name (default)");
++            }
++        addAdv(ar, "channel_num", "Frequency slot", slotOpts.c_str(), SLOTS, 105,
++               "Everyone on your mesh must use the same slot. Leave it on the default unless your mesh says otherwise.");
++        addAdv(ar, "rx_boost", LV_SYMBOL_DOWNLOAD " Boosted receive (SX126x)", nullptr, nullptr, 0,
++               "Hears weaker signals for a little more power.");
++        addAdv(ar, "ignore_mqtt", "Ignore packets that came over MQTT", nullptr, nullptr, 0);
++
++        lv_obj_t *am = card(body, "MESH");
++        static const int32_t REB[] = {0, 1, 2, 3, 4, 5};
++        addAdv(am, "rebroadcast", "What this radio relays",
++               "Everything (default)\\nEverything, without decoding\\nOnly my channels\\nOnly from known nodes\\nNothing\\nCore traffic only",
++               REB, 6);
++        static const int32_t NIS[] = {3600, 10800, 21600, 43200, 86400};
++        addAdv(am, "nodeinfo_secs", "Announce my name every", "Hour\\n3 hours (default)\\n6 hours\\n12 hours\\nDay", NIS, 5);
++        static const int32_t TZI[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
++        addAdv(am, "tz", "Time zone (summer time is automatic)",
++               "Not set (UTC)\\nPacific (US)\\nMountain (US)\\nArizona\\nCentral (US)\\nEastern (US)\\nAlaska\\nHawaii\\nUTC\\nUK\\nCentral "
++               "Europe\\nSydney",
++               TZI, 12);
++
++        lv_obj_t *ap = card(body, "POSITION");
++        static const int32_t PBS[] = {300, 900, 1800, 3600, 7200, 21600, 43200};
++        addAdv(ap, "pos_secs", "Send my position every", "5 minutes\\n15 minutes (default)\\n30 minutes\\nHour\\n2 hours\\n6 hours\\n12 hours",
++               PBS, 7);
++        addAdv(ap, "pos_smart", "Send sooner when I move (smart)", nullptr, nullptr, 0);
++        static const int32_t SMD[] = {50, 100, 250, 500, 1000};
++        addAdv(ap, "pos_smart_m", "...after moving", "50 m\\n100 m (default)\\n250 m\\n500 m\\n1 km", SMD, 5);
++        static const int32_t SMS[] = {30, 60, 120, 300};
++        addAdv(ap, "pos_smart_s", "...but not more often than", "30 seconds\\n1 minute\\n2 minutes\\n5 minutes", SMS, 4);
++        static const int32_t GUI[] = {30, 120, 300, 600, 1800};
++        addAdv(ap, "gps_secs", "Read the GPS every", "30 seconds\\n2 minutes (default)\\n5 minutes\\n10 minutes\\n30 minutes", GUI, 5);
++
++        lv_obj_t *ab = card(body, "BLUETOOTH AND POWER");
++        static const int32_t BTM[] = {0, 1, 2};
++        addAdv(ab, "bt_mode", "Pairing", "New PIN each pairing\\nFixed PIN (shown in Phone app)\\nNo PIN", BTM, 3);
++        static const int32_t OFFB[] = {0, 3600, 21600, 43200, 86400};
++        addAdv(ab, "batt_off", "Turn off on battery after", "Never (default)\\n1 hour\\n6 hours\\n12 hours\\n1 day", OFFB, 5);
++
++        lv_obj_t *au = card(body, "UNITS AND CLOCK");
++        static const int32_t UNI[] = {0, 1};
++        addAdv(au, "units", "Distances", "Metric (km, m)\\nImperial (mi, ft)", UNI, 2);
++        addAdv(au, "clock12", "12-hour clock", nullptr, nullptr, 0);
++
++        lv_obj_t *amo = card(body, "MODULES");
++        addAdv(amo, "neighbor", "Neighbour info (share who I hear directly)", nullptr, nullptr, 0);
++        static const int32_t NBS[] = {14400, 21600, 43200, 86400};
++        addAdv(amo, "neighbor_secs", "...every", "4 hours\\n6 hours\\n12 hours\\nDay", NBS, 4);
++        addAdv(amo, "store_fwd", "Store and forward (fetch missed messages from a server)", nullptr, nullptr, 0);
++        addAdv(amo, "range_test", "Range test", nullptr, nullptr, 0);
++        static const int32_t RTS[] = {0, 30, 60, 300};
++        addAdv(amo, "range_secs", "...this radio", "Only listens\\nSends every 30 s\\nSends every minute\\nSends every 5 minutes", RTS, 4);
++        static const int32_t DTS[] = {900, 1800, 3600, 10800, 21600};
++        addAdv(amo, "dev_tele_secs", "Share my battery level every", "15 minutes\\n30 minutes (default)\\nHour\\n3 hours\\n6 hours", DTS, 5);
++
++        lv_obj_t *asv = plain(body);
++        lv_obj_set_size(asv, LV_PCT(100), LV_SIZE_CONTENT);
++        column(asv, 4);
++        advSave = flatButton(asv, LV_SYMBOL_SAVE " Save and restart", C_CYAN, W() - 2 * PAD - 16, 36);
++        stop(advSave);
++        advNote = label(asv, FSMALL, C_DIM, "");
++        lv_obj_set_width(advNote, LV_PCT(100));
++        lv_label_set_long_mode(advNote, LV_LABEL_LONG_MODE_WRAP);
++        lv_obj_add_event_cb(
++            advSave,
++            [](lv_event_t *e) {
++                HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++                if (!ui->advDirty || !ui->cbs.advApply)
++                    return ui->showToast("Nothing changed");
++                int n = ui->cbs.advApply();
++                ui->advDirty = false;
++                ui->showToast(n ? LV_SYMBOL_REFRESH " Saved - the radio restarts to apply it" : "Couldn't send the settings", 5000);
++                ui->refreshAdvanced();
++            },
++            LV_EVENT_CLICKED, this);
++    }
++
 +    lv_obj_t *cdv = card(body, "DEVICE");
 +    setInfo = label(cdv, &F12, C_TEXT, "");
 +    lv_obj_set_width(setInfo, LV_PCT(100));
@@ -7948,8 +8097,118 @@ index 0000000..b6059d2
 +    lv_obj_set_style_text_align(about, LV_TEXT_ALIGN_CENTER, 0);
 +}
 +
++// ================================================================= advanced settings rows
++void HopticsUI::addAdv(lv_obj_t *parent, const char *key, const char *text, const char *opts, const int32_t *vals, int n, const char *help)
++{
++    AdvRow a;
++    a.key = key;
++    a.vals = opts ? vals : nullptr;
++    a.n = n;
++    a.row = plain(parent); // the control and its help, shown or hidden together
++    lv_obj_set_size(a.row, LV_PCT(100), LV_SIZE_CONTENT);
++    column(a.row, 2);
++    if (opts) {
++        lv_obj_t *r = settingsRow(a.row, text);
++        a.ctl = lv_dropdown_create(r);
++        ctlWidth(a.ctl);
++        lv_dropdown_set_options(a.ctl, opts);
++        styleDropdown(a.ctl);
++    } else {
++        lv_obj_t *rr = plain(a.row);
++        lv_obj_set_size(rr, LV_PCT(100), LV_SIZE_CONTENT);
++        lv_obj_set_style_min_height(rr, 30, 0);
++        row(rr, 6);
++        lv_obj_set_flex_align(rr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++        lv_obj_t *l = label(rr, &F14, C_TEXT, text);
++        lv_obj_set_flex_grow(l, 1);
++        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
++        a.ctl = lv_switch_create(rr);
++        lv_obj_set_style_bg_color(a.ctl, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    }
++    stop(a.ctl);
++    if (help) {
++        lv_obj_t *h = label(a.row, FSMALL, C_DIM, help);
++        lv_obj_set_width(h, LV_PCT(100));
++        lv_label_set_long_mode(h, LV_LABEL_LONG_MODE_WRAP);
++    }
++    lv_obj_set_user_data(a.ctl, (void *)(intptr_t)advRows.size());
++    lv_obj_add_event_cb(
++        a.ctl,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading || !ui->cbs.advSet)
++                return;
++            size_t i = (size_t)(intptr_t)lv_obj_get_user_data((lv_obj_t *)lv_event_get_current_target(e));
++            if (i >= ui->advRows.size())
++                return;
++            AdvRow &r = ui->advRows[i];
++            int32_t v = r.vals ? r.vals[std::min<int>((int)lv_dropdown_get_selected(r.ctl), r.n - 1)]
++                               : (lv_obj_has_state(r.ctl, LV_STATE_CHECKED) ? 1 : 0);
++            if (ui->cbs.advSet(r.key, v))
++                ui->advDirty = true;
++            else
++                ui->showToast("That setting can't be changed right now");
++            ui->refreshAdvanced();
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++    advRows.push_back(a);
++}
++
++void HopticsUI::refreshAdvanced(void)
++{
++    if (advRows.empty())
++        return;
++    const bool was = settingsLoading;
++    settingsLoading = true;
++    int32_t on = 0;
++    auto flag = [&](const char *k) { return cbs.advGet && cbs.advGet(k, on) && on; };
++    const bool smart = flag("pos_smart"), neigh = flag("neighbor"), range = flag("range_test");
++    for (auto &a : advRows) {
++        int32_t v = 0;
++        bool show = cbs.advGet && cbs.advGet(a.key, v);
++        // a follow-up row only shows while the switch above it is on
++        if (show && (!strcmp(a.key, "pos_smart_m") || !strcmp(a.key, "pos_smart_s")))
++            show = smart;
++        if (show && !strcmp(a.key, "neighbor_secs"))
++            show = neigh;
++        if (show && !strcmp(a.key, "range_secs"))
++            show = range;
++        if (!show) {
++            lv_obj_add_flag(a.row, LV_OBJ_FLAG_HIDDEN);
++            continue;
++        }
++        lv_obj_remove_flag(a.row, LV_OBJ_FLAG_HIDDEN);
++        if (!a.vals) {
++            if (v)
++                lv_obj_add_state(a.ctl, LV_STATE_CHECKED);
++            else
++                lv_obj_remove_state(a.ctl, LV_STATE_CHECKED);
++        } else {
++            int best = 0; // the option with this value, or the nearest below it
++            for (int i = 0; i < a.n; i++)
++                if (a.vals[i] == v || (a.vals[i] < v && a.vals[i] > a.vals[best]))
++                    best = i;
++            lv_dropdown_set_selected(a.ctl, (uint32_t)best);
++        }
++    }
++    if (advNote)
++        lv_label_set_text(advNote, advDirty ? LV_SYMBOL_WARNING " Not saved yet: press Save and restart to send these to the radio."
++                                            : "Saved settings are applied when the radio restarts (about 10 seconds).");
++    if (advSave) {
++        if (advDirty)
++            lv_obj_remove_state(advSave, LV_STATE_DISABLED);
++        else
++            lv_obj_add_state(advSave, LV_STATE_DISABLED);
++    }
++    settingsLoading = was;
++}
++
 +void HopticsUI::openSettings(void)
 +{
++    if (cbs.advDiscard)
++        cbs.advDiscard(); // the advanced rows start from what the radio has now
++    advDirty = false;
++    refreshAdvanced();
 +    settingsLoading = true;
 +    lv_slider_set_value(setBright, brightness, LV_ANIM_OFF);
 +    uint32_t ti = 2;
@@ -10788,14 +11047,16 @@ index 0000000..b6059d2
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..7df4922
+index 0000000..479c82a
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,837 @@
+@@ -0,0 +1,1123 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsView.h"
++#include <algorithm>
++#include <cstring>
 +#include "graphics/view/TFT/HopticsInput.h"
 +#include "graphics/view/TFT/HopticsReport.h"
 +#include "graphics/common/LoRaPresets.h"
@@ -11247,6 +11508,10 @@ index 0000000..7df4922
 +                return static_cast<HopticsController *>(controller)->requestPositionBroadcast();
 +        return false;
 +    };
++    cb.advGet = [this](const char *k, int32_t &v) { return advGet(k, v); };
++    cb.advSet = [this](const char *k, int32_t v) { return advSet(k, v); };
++    cb.advApply = [this]() { return advApply(); };
++    cb.advDiscard = [this]() { stg.dirty = 0; };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
 +    // Keyboards that go through device-ui's input policy (ThinkNode M9) have UP / DOWN turned into
@@ -11469,6 +11734,286 @@ index 0000000..7df4922
 +    const bool isDefault = strcmp(cfg.address, "mqtt.meshtastic.org") == 0;
 +    ui.setMqttConfig(cfg.enabled, isDefault ? "" : cfg.address, isDefault && strcmp(cfg.username, "meshdev") == 0 ? "" : cfg.username,
 +                     cfg.password[0] != 0, cfg.root);
++}
++
++// ---------------------------------------------------------------- the remaining configs (advanced settings)
++void HopticsView::updatePowerConfig(const meshtastic_Config_PowerConfig &cfg)
++{
++    power = cfg;
++    havePower = true;
++}
++void HopticsView::updateDisplayConfig(const meshtastic_Config_DisplayConfig &cfg)
++{
++    display = cfg;
++    haveDisplay = true;
++}
++void HopticsView::updateNeighborInfoModule(const meshtastic_ModuleConfig_NeighborInfoConfig &cfg)
++{
++    neighbor = cfg;
++    haveNeighbor = true;
++}
++void HopticsView::updateRangeTestModule(const meshtastic_ModuleConfig_RangeTestConfig &cfg)
++{
++    rangeTest = cfg;
++    haveRange = true;
++}
++void HopticsView::updateStoreForwardModule(const meshtastic_ModuleConfig_StoreForwardConfig &cfg)
++{
++    storeFwd = cfg;
++    haveStore = true;
++}
++
++namespace
++{
++// time zones offered on the screen, as POSIX TZ strings (Meshtastic's Config.DeviceConfig.tzdef); 0 = not set
++const char *const TZS[] = {"",
++                           "PST8PDT,M3.2.0,M11.1.0",
++                           "MST7MDT,M3.2.0,M11.1.0",
++                           "MST7",
++                           "CST6CDT,M3.2.0,M11.1.0",
++                           "EST5EDT,M3.2.0,M11.1.0",
++                           "AKST9AKDT,M3.2.0,M11.1.0",
++                           "HST10",
++                           "UTC0",
++                           "GMT0BST,M3.5.0/1,M10.5.0",
++                           "CET-1CEST,M3.5.0,M10.5.0/3",
++                           "AEST-10AEDT,M10.1.0,M4.1.0/3"};
++constexpr int N_TZ = sizeof(TZS) / sizeof(TZS[0]);
++enum : uint32_t {
++    D_LORA = 1 << 0,
++    D_DEVICE = 1 << 1,
++    D_POS = 1 << 2,
++    D_POWER = 1 << 3,
++    D_BT = 1 << 4,
++    D_DISPLAY = 1 << 5,
++    D_NEIGH = 1 << 6,
++    D_RANGE = 1 << 7,
++    D_STORE = 1 << 8,
++    D_TELE = 1 << 9
++};
++} // namespace
++
++// the value a row shows: the staged one if it was changed on the screen, the radio's otherwise
++bool HopticsView::advGet(const char *k, int32_t &v)
++{
++#define CUR(flag, field, have) const auto &field##_ = (stg.dirty & flag) ? stg.field : field; if (!(have)) return false
++    if (!strcmp(k, "tx_power") || !strcmp(k, "hop_limit") || !strcmp(k, "channel_num") || !strcmp(k, "rx_boost") ||
++        !strcmp(k, "ignore_mqtt")) {
++        CUR(D_LORA, lora, haveLora);
++        v = !strcmp(k, "tx_power")    ? lora_.tx_power
++            : !strcmp(k, "hop_limit") ? (int32_t)lora_.hop_limit
++            : !strcmp(k, "channel_num") ? (int32_t)lora_.channel_num
++            : !strcmp(k, "rx_boost")    ? (lora_.sx126x_rx_boosted_gain ? 1 : 0)
++                                        : (lora_.ignore_mqtt ? 1 : 0);
++        return true;
++    }
++    if (!strcmp(k, "rebroadcast") || !strcmp(k, "nodeinfo_secs") || !strcmp(k, "tz")) {
++        CUR(D_DEVICE, device, haveDevice);
++        if (!strcmp(k, "rebroadcast"))
++            v = (int32_t)device_.rebroadcast_mode;
++        else if (!strcmp(k, "nodeinfo_secs"))
++            v = device_.node_info_broadcast_secs ? (int32_t)device_.node_info_broadcast_secs : 10800;
++        else {
++            v = 0;
++            for (int i = 1; i < N_TZ; i++)
++                if (!strcmp(device_.tzdef, TZS[i]))
++                    v = i;
++        }
++        return true;
++    }
++    if (!strcmp(k, "pos_secs") || !strcmp(k, "pos_smart") || !strcmp(k, "pos_smart_m") || !strcmp(k, "pos_smart_s") ||
++        !strcmp(k, "gps_secs")) {
++        CUR(D_POS, position, havePosition);
++        if (!strcmp(k, "gps_secs") && position_.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT)
++            return false; // no GPS here: nothing to read
++        v = !strcmp(k, "pos_secs")      ? (int32_t)(position_.position_broadcast_secs ? position_.position_broadcast_secs : 900)
++            : !strcmp(k, "pos_smart")   ? (position_.position_broadcast_smart_enabled ? 1 : 0)
++            : !strcmp(k, "pos_smart_m") ? (int32_t)(position_.broadcast_smart_minimum_distance ? position_.broadcast_smart_minimum_distance : 100)
++            : !strcmp(k, "pos_smart_s") ? (int32_t)(position_.broadcast_smart_minimum_interval_secs ? position_.broadcast_smart_minimum_interval_secs : 30)
++                                        : (int32_t)(position_.gps_update_interval ? position_.gps_update_interval : 120);
++        return true;
++    }
++    if (!strcmp(k, "batt_off")) {
++        CUR(D_POWER, power, havePower);
++        v = (int32_t)power_.on_battery_shutdown_after_secs;
++        return true;
++    }
++    if (!strcmp(k, "bt_mode")) {
++        CUR(D_BT, bluetooth, haveBt);
++        v = (int32_t)bluetooth_.mode;
++        return true;
++    }
++    if (!strcmp(k, "units") || !strcmp(k, "clock12")) {
++        CUR(D_DISPLAY, display, haveDisplay);
++        v = !strcmp(k, "units") ? (int32_t)display_.units : (display_.use_12h_clock ? 1 : 0);
++        return true;
++    }
++    if (!strcmp(k, "neighbor") || !strcmp(k, "neighbor_secs")) {
++        CUR(D_NEIGH, neighbor, haveNeighbor);
++        v = !strcmp(k, "neighbor") ? (neighbor_.enabled ? 1 : 0) : (int32_t)(neighbor_.update_interval ? neighbor_.update_interval : 14400);
++        return true;
++    }
++    if (!strcmp(k, "store_fwd")) {
++        CUR(D_STORE, storeFwd, haveStore);
++        v = storeFwd_.enabled ? 1 : 0;
++        return true;
++    }
++    if (!strcmp(k, "range_test") || !strcmp(k, "range_secs")) {
++        CUR(D_RANGE, rangeTest, haveRange);
++        v = !strcmp(k, "range_test") ? (rangeTest_.enabled ? 1 : 0) : (int32_t)rangeTest_.sender;
++        return true;
++    }
++    if (!strcmp(k, "dev_tele_secs")) {
++        CUR(D_TELE, telemetry, haveTelemetry);
++        v = (int32_t)(telemetry_.device_update_interval ? telemetry_.device_update_interval : 1800);
++        return true;
++    }
++#undef CUR
++    return false;
++}
++
++// stage a change: copy the radio's config the first time one of its fields changes
++bool HopticsView::advSet(const char *k, int32_t v)
++{
++#define STAGE(flag, field, have)                                                                                                  \
++    if (!(have))                                                                                                                 \
++        return false;                                                                                                            \
++    if (!(stg.dirty & flag)) {                                                                                                   \
++        stg.field = field;                                                                                                       \
++        stg.dirty |= flag;                                                                                                       \
++    }                                                                                                                            \
++    auto &field##_ = stg.field
++    if (!strcmp(k, "tx_power") || !strcmp(k, "hop_limit") || !strcmp(k, "channel_num") || !strcmp(k, "rx_boost") ||
++        !strcmp(k, "ignore_mqtt")) {
++        STAGE(D_LORA, lora, haveLora);
++        if (!strcmp(k, "tx_power"))
++            lora_.tx_power = (int8_t)v;
++        else if (!strcmp(k, "hop_limit"))
++            lora_.hop_limit = (uint32_t)std::min<int32_t>(7, std::max<int32_t>(1, v));
++        else if (!strcmp(k, "channel_num"))
++            lora_.channel_num = (uint16_t)std::max<int32_t>(0, v);
++        else if (!strcmp(k, "rx_boost"))
++            lora_.sx126x_rx_boosted_gain = v != 0;
++        else
++            lora_.ignore_mqtt = v != 0;
++        return true;
++    }
++    if (!strcmp(k, "rebroadcast") || !strcmp(k, "nodeinfo_secs") || !strcmp(k, "tz")) {
++        STAGE(D_DEVICE, device, haveDevice);
++        if (!strcmp(k, "rebroadcast"))
++            device_.rebroadcast_mode = (meshtastic_Config_DeviceConfig_RebroadcastMode)v;
++        else if (!strcmp(k, "nodeinfo_secs"))
++            device_.node_info_broadcast_secs = (uint32_t)v;
++        else {
++            if (v < 0 || v >= N_TZ)
++                return false;
++            strncpy(device_.tzdef, TZS[v], sizeof(device_.tzdef) - 1);
++            device_.tzdef[sizeof(device_.tzdef) - 1] = 0;
++        }
++        return true;
++    }
++    if (!strcmp(k, "pos_secs") || !strcmp(k, "pos_smart") || !strcmp(k, "pos_smart_m") || !strcmp(k, "pos_smart_s") ||
++        !strcmp(k, "gps_secs")) {
++        STAGE(D_POS, position, havePosition);
++        if (!strcmp(k, "pos_secs"))
++            position_.position_broadcast_secs = (uint32_t)v;
++        else if (!strcmp(k, "pos_smart"))
++            position_.position_broadcast_smart_enabled = v != 0;
++        else if (!strcmp(k, "pos_smart_m"))
++            position_.broadcast_smart_minimum_distance = (uint32_t)v;
++        else if (!strcmp(k, "pos_smart_s"))
++            position_.broadcast_smart_minimum_interval_secs = (uint32_t)v;
++        else
++            position_.gps_update_interval = (uint32_t)v;
++        return true;
++    }
++    if (!strcmp(k, "batt_off")) {
++        STAGE(D_POWER, power, havePower);
++        power_.on_battery_shutdown_after_secs = (uint32_t)v;
++        return true;
++    }
++    if (!strcmp(k, "bt_mode")) {
++        STAGE(D_BT, bluetooth, haveBt);
++        bluetooth_.mode = (meshtastic_Config_BluetoothConfig_PairingMode)v;
++        if (bluetooth_.mode == meshtastic_Config_BluetoothConfig_PairingMode_FIXED_PIN && bluetooth_.fixed_pin < 100000)
++            bluetooth_.fixed_pin = randomPin(); // a fixed PIN needs one: make it now, the Phone app card shows it
++        return true;
++    }
++    if (!strcmp(k, "units") || !strcmp(k, "clock12")) {
++        STAGE(D_DISPLAY, display, haveDisplay);
++        if (!strcmp(k, "units"))
++            display_.units = (meshtastic_Config_DisplayConfig_DisplayUnits)v;
++        else
++            display_.use_12h_clock = v != 0;
++        return true;
++    }
++    if (!strcmp(k, "neighbor") || !strcmp(k, "neighbor_secs")) {
++        STAGE(D_NEIGH, neighbor, haveNeighbor);
++        if (!strcmp(k, "neighbor"))
++            neighbor_.enabled = v != 0;
++        else
++            neighbor_.update_interval = (uint32_t)v;
++        return true;
++    }
++    if (!strcmp(k, "store_fwd")) {
++        STAGE(D_STORE, storeFwd, haveStore);
++        storeFwd_.enabled = v != 0;
++        return true;
++    }
++    if (!strcmp(k, "range_test") || !strcmp(k, "range_secs")) {
++        STAGE(D_RANGE, rangeTest, haveRange);
++        if (!strcmp(k, "range_test"))
++            rangeTest_.enabled = v != 0;
++        else
++            rangeTest_.sender = (uint32_t)v;
++        return true;
++    }
++    if (!strcmp(k, "dev_tele_secs")) {
++        STAGE(D_TELE, telemetry, haveTelemetry);
++        telemetry_.device_update_interval = (uint32_t)v;
++        return true;
++    }
++#undef STAGE
++    return false;
++}
++
++// send what changed inside one edit transaction: the radio saves once at the commit and restarts once
++int HopticsView::advApply(void)
++{
++    if (!stg.dirty)
++        return 0;
++    meshtastic_AdminMessage begin = meshtastic_AdminMessage_init_zero;
++    begin.which_payload_variant = meshtastic_AdminMessage_begin_edit_settings_tag;
++    begin.begin_edit_settings = true;
++    controller->sendAdminMessage(begin, ownNode);
++    int n = 0;
++    if (stg.dirty & D_LORA)
++        lora = stg.lora, n++, controller->sendConfig(meshtastic_Config_LoRaConfig{stg.lora}, ownNode);
++    if (stg.dirty & D_DEVICE)
++        device = stg.device, n++, controller->sendConfig(meshtastic_Config_DeviceConfig{stg.device}, ownNode);
++    if (stg.dirty & D_POS)
++        position = stg.position, n++, controller->sendConfig(meshtastic_Config_PositionConfig{stg.position}, ownNode);
++    if (stg.dirty & D_POWER)
++        power = stg.power, n++, controller->sendConfig(meshtastic_Config_PowerConfig{stg.power}, ownNode);
++    if (stg.dirty & D_BT)
++        bluetooth = stg.bluetooth, n++, controller->sendConfig(meshtastic_Config_BluetoothConfig{stg.bluetooth}, ownNode);
++    if (stg.dirty & D_DISPLAY)
++        display = stg.display, n++, controller->sendConfig(meshtastic_Config_DisplayConfig{stg.display}, ownNode);
++    if (stg.dirty & D_NEIGH)
++        neighbor = stg.neighbor, n++, controller->sendConfig(meshtastic_ModuleConfig_NeighborInfoConfig{stg.neighbor}, ownNode);
++    if (stg.dirty & D_RANGE)
++        rangeTest = stg.rangeTest, n++, controller->sendConfig(meshtastic_ModuleConfig_RangeTestConfig{stg.rangeTest}, ownNode);
++    if (stg.dirty & D_STORE)
++        storeFwd = stg.storeFwd, n++, controller->sendConfig(meshtastic_ModuleConfig_StoreForwardConfig{stg.storeFwd}, ownNode);
++    if (stg.dirty & D_TELE)
++        telemetry = stg.telemetry, n++, controller->sendConfig(meshtastic_ModuleConfig_TelemetryConfig{stg.telemetry}, ownNode);
++    meshtastic_AdminMessage commit = meshtastic_AdminMessage_init_zero;
++    commit.which_payload_variant = meshtastic_AdminMessage_commit_edit_settings_tag;
++    commit.commit_edit_settings = true;
++    controller->sendAdminMessage(commit, ownNode);
++    stg.dirty = 0;
++    armRebootFallback();
++    return n;
 +}
 +
 +void HopticsView::updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg)
