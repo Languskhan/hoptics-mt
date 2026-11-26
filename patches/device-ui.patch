@@ -737,10 +737,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..1950e62
+index 0000000..2532968
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,658 @@
+@@ -0,0 +1,659 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -1198,6 +1198,7 @@ index 0000000..1950e62
 +    LiveFilter liveFilter = LF_ALL;
 +    float myVoltage = 0;
 +    int region = 0, preset = 0, role = 0;
++    std::vector<int> presetVals; // the preset dropdown's values: the presets the region allows
 +    char regionName[16] = "--", presetName[20] = "--";
 +    uint8_t hopLimit = 3;
 +    int8_t txPower = 0;
@@ -3436,10 +3437,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..b6059d2
+index 0000000..0198333
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7346 @@
+@@ -0,0 +1,7437 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3454,6 +3455,7 @@ index 0000000..b6059d2
 +#include <cstring>
 +#include <ctime>
 +#include <initializer_list>
++#include <vector>
 +
 +#include <cstdlib>
 +#if defined(ARDUINO_ARCH_ESP32)
@@ -3782,19 +3784,95 @@ index 0000000..b6059d2
 +    int value;
 +    const char *name;
 +};
-+const Opt REGIONS[] = {{0, "Unset"},   {1, "US"},      {2, "EU_433"},  {3, "EU_868"},  {4, "CN"},      {5, "JP"},
-+                       {6, "ANZ"},     {7, "KR"},      {8, "TW"},      {9, "RU"},      {10, "IN"},     {11, "NZ_865"},
-+                       {12, "TH"},     {13, "LORA_24"}, {14, "UA_433"}, {15, "UA_868"}, {16, "MY_433"}, {17, "MY_919"},
-+                       {18, "SG_923"}, {19, "PH_433"}, {20, "PH_868"}, {21, "PH_915"}, {22, "ANZ_433"}, {23, "KZ_433"},
-+                       {24, "KZ_863"}, {25, "NP_865"}, {26, "BR_902"}};
-+const Opt PRESETS[] = {{0, "Long Fast"},    {9, "Long Turbo"},  {7, "Long Moderate"}, {1, "Long Slow"},  {4, "Medium Fast"},
-+                       {3, "Medium Slow"},  {6, "Short Fast"},  {5, "Short Slow"},    {8, "Short Turbo"}};
++// every region Meshtastic 2.8 defines a band for (src/mesh/RadioInterface.cpp), with where it is used. Left out:
++// the 2 m ham regions (144-148 MHz: below the 150 MHz these boards' radios tune to), EU_874 / EU_917 (codes with no
++// band yet) and UA_868 (no band since Ukraine's 2026 rules). LORA_24 needs a 2.4 GHz radio, which these boards don't
++// have. The ham regions work only in licensed mode.
++const Opt REGIONS[] = {{0, "Unset"},
++                       {1, "US - Americas 915"},
++                       {26, "BR_902 - Brazil"},
++                       {3, "EU_868 - Europe 868"},
++                       {29, "EU_866 - Europe 866 (Lite)"},
++                       {32, "EU_N_868 - Europe narrow"},
++                       {2, "EU_433 - Europe 433"},
++                       {9, "RU - Russia"},
++                       {14, "UA_433 - Ukraine 433"},
++                       {24, "KZ_863 - Kazakhstan 863"},
++                       {23, "KZ_433 - Kazakhstan 433"},
++                       {10, "IN - India"},
++                       {25, "NP_865 - Nepal"},
++                       {4, "CN - China"},
++                       {5, "JP - Japan"},
++                       {7, "KR - Korea"},
++                       {8, "TW - Taiwan"},
++                       {12, "TH - Thailand"},
++                       {17, "MY_919 - Malaysia 919"},
++                       {16, "MY_433 - Malaysia 433"},
++                       {18, "SG_923 - Singapore"},
++                       {21, "PH_915 - Philippines 915"},
++                       {20, "PH_868 - Philippines 868"},
++                       {19, "PH_433 - Philippines 433"},
++                       {6, "ANZ - Australia / NZ 915"},
++                       {22, "ANZ_433 - Australia / NZ 433"},
++                       {11, "NZ_865 - New Zealand 865"},
++                       {34, "ITU1_70CM - Ham 70 cm, Region 1"},
++                       {35, "ITU2_70CM - Ham 70 cm, Region 2"},
++                       {36, "ITU3_70CM - Ham 70 cm, Region 3"},
++                       {37, "ITU2_125CM - Ham 1.25 m, Region 2"},
++                       {13, "LORA_24 - 2.4 GHz radios"}};
++// every modem preset; each region allows only some (presetsFor)
++const Opt PRESETS[] = {{0, "Long Fast"},    {9, "Long Turbo"},   {7, "Long Moderate"}, {1, "Long Slow"},   {4, "Medium Fast"},
++                       {16, "Medium Turbo"}, {3, "Medium Slow"},  {6, "Short Fast"},    {5, "Short Slow"},  {8, "Short Turbo"},
++                       {10, "Lite Fast"},   {11, "Lite Slow"},   {12, "Narrow Fast"},  {13, "Narrow Slow"}, {14, "Tiny Fast"},
++                       {15, "Tiny Slow"}};
 +const Opt ROLES[] = {{0, "Client"},        {1, "Client Mute"}, {8, "Client Hidden"}, {12, "Client Base"}, {5, "Tracker"},
 +                     {6, "Sensor"},        {2, "Router"},      {11, "Router Late"},  {7, "TAK"},          {10, "TAK Tracker"},
 +                     {9, "Lost & Found"}};
 +const uint16_t TIMEOUTS[] = {0, 15, 30, 60, 120, 300, 600};
 +const char *TIMEOUT_OPTS = "Never\n15 s\n30 s\n1 min\n2 min\n5 min\n10 min";
 +
++// the presets a region allows, as Meshtastic 2.8's region profiles set them. The three EU 868 regions share one
++// list: picking a preset of a sibling switches the radio to that region (the firmware does it).
++std::vector<Opt> presetsFor(int region)
++{
++    auto pick = [](std::initializer_list<int> vals) {
++        std::vector<Opt> out;
++        for (const Opt &o : PRESETS)
++            for (int v : vals)
++                if (o.value == v)
++                    out.push_back(o);
++        return out;
++    };
++    switch (region) {
++    case 3:  // EU_868
++    case 29: // EU_866
++    case 32: // EU_N_868
++        return pick({0, 1, 3, 4, 5, 6, 7, 10, 11, 12, 13});
++    case 34: case 35: case 36: case 37: // ham 70 cm and 1.25 m
++        return pick({12, 13});
++    case 0: // not set yet
++        return pick({0});
++    default:
++        return pick({0, 1, 3, 4, 5, 6, 7, 8, 9, 16});
++    }
++}
++std::string optString(const std::vector<Opt> &opts)
++{
++    std::string s;
++    for (size_t i = 0; i < opts.size(); i++) {
++        if (i)
++            s += "\n";
++        s += opts[i].name;
++    }
++    return s;
++}
++int optIndex(const std::vector<Opt> &opts, int value)
++{
++    for (size_t i = 0; i < opts.size(); i++)
++        if (opts[i].value == value)
++            return (int)i;
++    return 0;
++}
 +template <size_t N> std::string optString(const Opt (&opts)[N])
 +{
 +    std::string s;
@@ -7437,7 +7515,10 @@ index 0000000..b6059d2
 +    r = settingsRow(cr, "Modem preset");
 +    setPresetDd = lv_dropdown_create(r);
 +    ctlWidth(setPresetDd);
-+    lv_dropdown_set_options(setPresetDd, optString(PRESETS).c_str());
++    presetVals.clear();
++    for (const Opt &o : presetsFor(region))
++        presetVals.push_back(o.value);
++    lv_dropdown_set_options(setPresetDd, optString(presetsFor(region)).c_str());
 +    styleDropdown(setPresetDd);
 +    stop(setPresetDd);
 +    r = settingsRow(cr, "Device role");
@@ -7489,7 +7570,10 @@ index 0000000..b6059d2
 +            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
 +            if (ui->settingsLoading)
 +                return;
-+            int v = PRESETS[lv_dropdown_get_selected(ui->setPresetDd)].value;
++            const uint32_t sel = lv_dropdown_get_selected(ui->setPresetDd);
++            if (sel >= ui->presetVals.size())
++                return;
++            int v = ui->presetVals[sel];
 +            if (v != ui->preset && ui->cbs.setPreset) {
 +                ui->cbs.setPreset(v);
 +                ui->showToast(LV_SYMBOL_REFRESH " Preset set - rebooting");
@@ -8042,7 +8126,15 @@ index 0000000..b6059d2
 +        lv_dropdown_set_selected(setLnaDd, lnaMode == 3 ? 0 : (lnaMode == 1 ? 1 : 2));
 +    }
 +    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
-+    lv_dropdown_set_selected(setPresetDd, optIndex(PRESETS, preset));
++    const std::vector<Opt> po = presetsFor(region);
++    std::vector<int> vals;
++    for (const Opt &o : po)
++        vals.push_back(o.value);
++    if (vals != presetVals) { // the region changed: its own presets
++        presetVals = vals;
++        lv_dropdown_set_options(setPresetDd, optString(po).c_str());
++    }
++    lv_dropdown_set_selected(setPresetDd, optIndex(po, preset));
 +    lv_dropdown_set_selected(setRoleDd, optIndex(ROLES, role));
 +    const Node *me = findNode(myNode);
 +    lv_textarea_set_text(setShort, me ? me->shortName : "");
