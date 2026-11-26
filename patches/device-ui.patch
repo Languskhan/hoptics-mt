@@ -3486,7 +3486,7 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..9820ba4
+index 0000000..bcf2783
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
 @@ -0,0 +1,7555 @@
@@ -7908,23 +7908,23 @@ index 0000000..9820ba4
 +    // staged as they are changed and sent together (one save, one restart) with the button at the end
 +    {
 +        lv_obj_t *ah = label(body, &F12, C_MUTED,
-+                             "MORE SETTINGS  -  change any of these, then press \\"Save and restart\\" at the end. Nothing is sent "
++                             "MORE SETTINGS  -  change any of these, then press \"Save and restart\" at the end. Nothing is sent "
 +                             "before that.");
 +        lv_obj_set_width(ah, LV_PCT(100));
 +        lv_label_set_long_mode(ah, LV_LABEL_LONG_MODE_WRAP);
 +
 +        lv_obj_t *ar = card(body, "RADIO  -  MORE");
 +        static const int32_t TXP[] = {0, 5, 10, 14, 17, 20, 22};
-+        addAdv(ar, "tx_power", "Transmit power", "Highest allowed\\n5 dBm\\n10 dBm\\n14 dBm\\n17 dBm\\n20 dBm\\n22 dBm", TXP, 7);
++        addAdv(ar, "tx_power", "Transmit power", "Highest allowed\n5 dBm\n10 dBm\n14 dBm\n17 dBm\n20 dBm\n22 dBm", TXP, 7);
 +        static const int32_t HOPS[] = {1, 2, 3, 4, 5, 6, 7};
-+        addAdv(ar, "hop_limit", "Hop limit (how far my messages go)", "1\\n2\\n3 (default)\\n4\\n5\\n6\\n7", HOPS, 7,
++        addAdv(ar, "hop_limit", "Hop limit (how far my messages go)", "1\n2\n3 (default)\n4\n5\n6\n7", HOPS, 7,
 +               "Each hop is one more radio relaying it. More hops reach further but add traffic for everyone.");
 +        static int32_t SLOTS[105];
 +        static std::string slotOpts;
 +        if (slotOpts.empty())
 +            for (int i = 0; i <= 104; i++) {
 +                SLOTS[i] = i;
-+                slotOpts += i ? ("\\nSlot " + std::to_string(i)) : std::string("From the channel name (default)");
++                slotOpts += i ? ("\nSlot " + std::to_string(i)) : std::string("From the channel name (default)");
 +            }
 +        addAdv(ar, "channel_num", "Frequency slot", slotOpts.c_str(), SLOTS, 105,
 +               "Everyone on your mesh must use the same slot. Leave it on the default unless your mesh says otherwise.");
@@ -7935,49 +7935,49 @@ index 0000000..9820ba4
 +        lv_obj_t *am = card(body, "MESH");
 +        static const int32_t REB[] = {0, 1, 2, 3, 4, 5};
 +        addAdv(am, "rebroadcast", "What this radio relays",
-+               "Everything (default)\\nEverything, without decoding\\nOnly my channels\\nOnly from known nodes\\nNothing\\nCore traffic only",
++               "Everything (default)\nEverything, without decoding\nOnly my channels\nOnly from known nodes\nNothing\nCore traffic only",
 +               REB, 6);
 +        static const int32_t NIS[] = {3600, 10800, 21600, 43200, 86400};
-+        addAdv(am, "nodeinfo_secs", "Announce my name every", "Hour\\n3 hours (default)\\n6 hours\\n12 hours\\nDay", NIS, 5);
++        addAdv(am, "nodeinfo_secs", "Announce my name every", "Hour\n3 hours (default)\n6 hours\n12 hours\nDay", NIS, 5);
 +        static const int32_t TZI[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 +        addAdv(am, "tz", "Time zone (summer time is automatic)",
-+               "Not set (UTC)\\nPacific (US)\\nMountain (US)\\nArizona\\nCentral (US)\\nEastern (US)\\nAlaska\\nHawaii\\nUTC\\nUK\\nCentral "
-+               "Europe\\nSydney",
++               "Not set (UTC)\nPacific (US)\nMountain (US)\nArizona\nCentral (US)\nEastern (US)\nAlaska\nHawaii\nUTC\nUK\nCentral "
++               "Europe\nSydney",
 +               TZI, 12);
 +
 +        lv_obj_t *ap = card(body, "POSITION");
 +        static const int32_t PBS[] = {300, 900, 1800, 3600, 7200, 21600, 43200};
-+        addAdv(ap, "pos_secs", "Send my position every", "5 minutes\\n15 minutes (default)\\n30 minutes\\nHour\\n2 hours\\n6 hours\\n12 hours",
++        addAdv(ap, "pos_secs", "Send my position every", "5 minutes\n15 minutes (default)\n30 minutes\nHour\n2 hours\n6 hours\n12 hours",
 +               PBS, 7);
 +        addAdv(ap, "pos_smart", "Send sooner when I move (smart)", nullptr, nullptr, 0);
 +        static const int32_t SMD[] = {50, 100, 250, 500, 1000};
-+        addAdv(ap, "pos_smart_m", "...after moving", "50 m\\n100 m (default)\\n250 m\\n500 m\\n1 km", SMD, 5);
++        addAdv(ap, "pos_smart_m", "...after moving", "50 m\n100 m (default)\n250 m\n500 m\n1 km", SMD, 5);
 +        static const int32_t SMS[] = {30, 60, 120, 300};
-+        addAdv(ap, "pos_smart_s", "...but not more often than", "30 seconds\\n1 minute\\n2 minutes\\n5 minutes", SMS, 4);
++        addAdv(ap, "pos_smart_s", "...but not more often than", "30 seconds\n1 minute\n2 minutes\n5 minutes", SMS, 4);
 +        static const int32_t GUI[] = {30, 120, 300, 600, 1800};
-+        addAdv(ap, "gps_secs", "Read the GPS every", "30 seconds\\n2 minutes (default)\\n5 minutes\\n10 minutes\\n30 minutes", GUI, 5);
++        addAdv(ap, "gps_secs", "Read the GPS every", "30 seconds\n2 minutes (default)\n5 minutes\n10 minutes\n30 minutes", GUI, 5);
 +
 +        lv_obj_t *ab = card(body, "BLUETOOTH AND POWER");
 +        static const int32_t BTM[] = {0, 1, 2};
-+        addAdv(ab, "bt_mode", "Pairing", "New PIN each pairing\\nFixed PIN (shown in Phone app)\\nNo PIN", BTM, 3);
++        addAdv(ab, "bt_mode", "Pairing", "New PIN each pairing\nFixed PIN (shown in Phone app)\nNo PIN", BTM, 3);
 +        static const int32_t OFFB[] = {0, 3600, 21600, 43200, 86400};
-+        addAdv(ab, "batt_off", "Turn off on battery after", "Never (default)\\n1 hour\\n6 hours\\n12 hours\\n1 day", OFFB, 5);
++        addAdv(ab, "batt_off", "Turn off on battery after", "Never (default)\n1 hour\n6 hours\n12 hours\n1 day", OFFB, 5);
 +
 +        lv_obj_t *au = card(body, "UNITS AND CLOCK");
 +        static const int32_t UNI[] = {0, 1};
-+        addAdv(au, "units", "Distances", "Metric (km, m)\\nImperial (mi, ft)", UNI, 2);
++        addAdv(au, "units", "Distances", "Metric (km, m)\nImperial (mi, ft)", UNI, 2);
 +        addAdv(au, "clock12", "12-hour clock", nullptr, nullptr, 0);
 +
 +        lv_obj_t *amo = card(body, "MODULES");
 +        addAdv(amo, "neighbor", "Neighbour info (share who I hear directly)", nullptr, nullptr, 0);
 +        static const int32_t NBS[] = {14400, 21600, 43200, 86400};
-+        addAdv(amo, "neighbor_secs", "...every", "4 hours\\n6 hours\\n12 hours\\nDay", NBS, 4);
++        addAdv(amo, "neighbor_secs", "...every", "4 hours\n6 hours\n12 hours\nDay", NBS, 4);
 +        addAdv(amo, "store_fwd", "Store and forward (fetch missed messages from a server)", nullptr, nullptr, 0);
 +        addAdv(amo, "range_test", "Range test", nullptr, nullptr, 0);
 +        static const int32_t RTS[] = {0, 30, 60, 300};
-+        addAdv(amo, "range_secs", "...this radio", "Only listens\\nSends every 30 s\\nSends every minute\\nSends every 5 minutes", RTS, 4);
++        addAdv(amo, "range_secs", "...this radio", "Only listens\nSends every 30 s\nSends every minute\nSends every 5 minutes", RTS, 4);
 +        static const int32_t DTS[] = {900, 1800, 3600, 10800, 21600};
-+        addAdv(amo, "dev_tele_secs", "Share my battery level every", "15 minutes\\n30 minutes (default)\\nHour\\n3 hours\\n6 hours", DTS, 5);
++        addAdv(amo, "dev_tele_secs", "Share my battery level every", "15 minutes\n30 minutes (default)\nHour\n3 hours\n6 hours", DTS, 5);
 +
 +        lv_obj_t *asv = plain(body);
 +        lv_obj_set_size(asv, LV_PCT(100), LV_SIZE_CONTENT);
