@@ -1,0 +1,17 @@
+{
+  "name": "Hoptics-MC companion (Heltec V4-R8 Expansion Kit V2)",
+  "version": "0.2.0-beta",
+  "new_install_prompt_erase": true,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "hoptics-mc-heltec-v4-r8-expansion-kit-v2-companion-0.2.0-beta.factory.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
