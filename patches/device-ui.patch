@@ -1,3 +1,51 @@
+diff --git a/include/graphics/driver/LGFXDriver.h b/include/graphics/driver/LGFXDriver.h
+index 98d4bc7..a0abc0c 100644
+--- a/include/graphics/driver/LGFXDriver.h
++++ b/include/graphics/driver/LGFXDriver.h
+@@ -8,6 +8,9 @@
+ #include "util/ILog.h"
+ #include "util/ISpiLock.h"
+ #include <functional>
++#if defined(ARCH_ESP32) && defined(HOPTICS_STRIP_LINES)
++#include <esp_heap_caps.h>
++#endif
+ 
+ // A board whose panel shares its SPI host with the radio or the SD card cannot let a DMA
+ // transfer run outside the bus lock, so it opts into the serialized flush below.
+@@ -519,13 +522,29 @@ template <class LGFX> void LGFXDriver<LGFX>::init(DeviceGUI *gui)
+ 
+ #elif defined(BOARD_HAS_PSRAM)
+     assert(ESP.getFreePsram());
++#ifdef HOPTICS_STRIP_LINES
++    // Hoptics: LVGL draws into a strip of internal RAM, not a big PSRAM buffer. Drawing into PSRAM goes through a
++    // small cache and the panel is fed from it more slowly; a strip is also sent in shorter pieces, so the SPI lock
++    // a shared bus (T-Deck, M9, V4-R8 card) needs is held for less time at once. Only taken while plenty of internal
++    // RAM stays free for Wi-Fi and Bluetooth; otherwise the PSRAM buffer below, as before.
++    bufsize = lgfx->screenWidth * HOPTICS_STRIP_LINES * sizeof(lv_color_t);
++    if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) >= bufsize + 64 * 1024)
++        buf1 = (lv_color_t *)heap_caps_aligned_alloc(64, bufsize, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
++    if (buf1)
++        ILOG_INFO("LVGL: %u-byte draw strip (%d lines) in internal RAM, %u left", bufsize, HOPTICS_STRIP_LINES,
++                  heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
++    else
++        ILOG_WARN("LVGL: not enough internal RAM for a %u-byte draw strip, drawing in PSRAM", bufsize);
++#endif
++    if (!buf1) {
+ #ifdef LGFX_BUFSIZE
+-    bufsize = LGFX_BUFSIZE;
++        bufsize = LGFX_BUFSIZE;
+ #else
+-    bufsize = lgfx->screenWidth * lgfx->screenHeight * sizeof(lv_color_t) / 4;
++        bufsize = lgfx->screenWidth * lgfx->screenHeight * sizeof(lv_color_t) / 4;
+ #endif
+-    ILOG_DEBUG("LVGL: allocating %u bytes PSRAM for draw buffer (max free PSRAM: %u)", bufsize, ESP.getMaxAllocPsram());
+-    buf1 = (lv_color_t *)LV_MEM_POOL_ALLOC(bufsize);
++        ILOG_DEBUG("LVGL: allocating %u bytes PSRAM for draw buffer (max free PSRAM: %u)", bufsize, ESP.getMaxAllocPsram());
++        buf1 = (lv_color_t *)LV_MEM_POOL_ALLOC(bufsize);
++    }
+     assert(buf1 != 0);
+     lv_display_set_buffers(this->display, buf1, buf2, bufsize, LV_DISPLAY_RENDER_MODE_PARTIAL);
+ #else
 diff --git a/include/graphics/view/TFT/HopticsBoard.h b/include/graphics/view/TFT/HopticsBoard.h
 new file mode 100644
 index 0000000..1eff63a
@@ -1513,9 +1561,18 @@ index 0000000..5cd2cb5
 +    static std::string snapshot;
 +};
 diff --git a/include/lv_conf.h b/include/lv_conf.h
-index 71cbee1..a0f7440 100644
+index 71cbee1..47c859c 100644
 --- a/include/lv_conf.h
 +++ b/include/lv_conf.h
+@@ -176,7 +176,7 @@
+ #define LV_COLOR_MIX_ROUND_OFS 0
+ 
+ /** Default display refresh, input device read and animation step period. */
+-#define LV_DEF_REFR_PERIOD 33
++#define LV_DEF_REFR_PERIOD 15 // Hoptics: redraws and touch reads every 15 ms (was 33), as Hoptics-MC
+ 
+ /** Used to initialize default sizes such as widget sizes and style paddings. */
+ #define LV_DPI_DEF 130
 @@ -1043,10 +1043,10 @@
  #define LV_FONT_MONTSERRAT_10 1
  
@@ -3437,10 +3494,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..0198333
+index 0000000..d484a9f
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7437 @@
+@@ -0,0 +1,7446 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3479,6 +3536,15 @@ index 0000000..0198333
 +#else
 +#define HOPTICS_HAVE_CITIES 0
 +#endif
++
++// Refreshed labels: setting the same text again still makes LVGL lay out and redraw the label, so only real
++// changes go through (as Hoptics-MC does). A null text keeps LVGL's meaning (refresh) and always goes through.
++static inline void hxSetText(lv_obj_t *l, const char *t)
++{
++    const char *cur = lv_label_get_text(l);
++    if (!t || !cur || strcmp(cur, t) != 0)
++        lv_label_set_text(l, t);
++}
 +
 +// ------------------------------------------------------------------ palette
 +namespace
@@ -3707,7 +3773,7 @@ index 0000000..0198333
 +lv_obj_t *pill(lv_obj_t *parent, const char *text, lv_color_t color)
 +{
 +    lv_obj_t *l = lv_label_create(parent);
-+    lv_label_set_text(l, text);
++    hxSetText(l, text);
 +    lv_obj_set_style_text_font(l, FSMALL, 0);
 +    lv_obj_set_style_text_color(l, color, 0);
 +    lv_obj_set_style_bg_color(l, color, 0);
@@ -3731,7 +3797,7 @@ index 0000000..0198333
 +    lv_obj_set_style_border_opa(b, LV_OPA_60, 0);
 +    lv_obj_set_style_radius(b, 8, 0);
 +    lv_obj_t *l = lv_label_create(b);
-+    lv_label_set_text(l, text);
++    hxSetText(l, text);
 +    lv_obj_set_style_text_color(l, color, 0);
 +    lv_obj_set_style_text_font(l, &F14, 0);
 +    lv_obj_center(l);
@@ -3742,7 +3808,7 @@ index 0000000..0198333
 +{
 +    lv_obj_t *l = lv_obj_get_child(btn, 0);
 +    if (l)
-+        lv_label_set_text(l, text);
++        hxSetText(l, text);
 +}
 +
 +void styleDropdown(lv_obj_t *dd)
@@ -4109,7 +4175,7 @@ index 0000000..0198333
 +    lv_obj_t *l = lv_label_create(parent);
 +    lv_obj_set_style_text_font(l, font, 0);
 +    lv_obj_set_style_text_color(l, color, 0);
-+    lv_label_set_text(l, text);
++    hxSetText(l, text);
 +    return l;
 +}
 +
@@ -4507,7 +4573,7 @@ index 0000000..0198333
 +{
 +    char buf[12];
 +    nodeShort(num, buf, sizeof(buf));
-+    lv_label_set_text(badge, buf);
++    hxSetText(badge, buf);
 +    lv_color_t c = nodeColor(num);
 +    lv_obj_set_style_bg_color(badge, c, 0);
 +    lv_obj_set_style_text_color(badge, lv_color_luminance(c) > 140 ? lv_color_hex(0x05090F) : lv_color_white(), 0);
@@ -4660,7 +4726,7 @@ index 0000000..0198333
 +void HopticsUI::setBootStatus(const char *text)
 +{
 +    if (bootStatus)
-+        lv_label_set_text(bootStatus, text);
++        hxSetText(bootStatus, text);
 +}
 +
 +// ================================================================= phone app mode
@@ -4725,11 +4791,11 @@ index 0000000..0198333
 +        // the boot and main screens stay alive underneath; the radio restarts out of this mode anyway
 +    }
 +    if (restarting) {
-+        lv_label_set_text(phoneMsg, pin ? "Restarting with Bluetooth on for the Meshtastic app..."
++        hxSetText(phoneMsg, pin ? "Restarting with Bluetooth on for the Meshtastic app..."
 +                                        : (touchInput ? "Restarting back to the touch screen..." : "Restarting back to this screen..."));
 +        lv_obj_add_flag(phoneBtn, LV_OBJ_FLAG_HIDDEN);
 +    } else {
-+        lv_label_set_text(phoneMsg, touchInput ? "Bluetooth is on for the Meshtastic app. The touch screen is paused while the "
++        hxSetText(phoneMsg, touchInput ? "Bluetooth is on for the Meshtastic app. The touch screen is paused while the "
 +                                                 "app is in charge. Pair the app with this PIN:"
 +                                               : "Bluetooth is on for the Meshtastic app. This screen is paused while the app "
 +                                                 "is in charge. Pair the app with this PIN:");
@@ -4739,9 +4805,9 @@ index 0000000..0198333
 +    if (pin)
 +        lv_label_set_text_fmt(phonePin, "%06u", (unsigned)pin);
 +    else if (!restarting)
-+        lv_label_set_text(phonePin, "------");
++        hxSetText(phonePin, "------");
 +    else
-+        lv_label_set_text(phonePin, "");
++        hxSetText(phonePin, "");
 +}
 +
 +// ================================================================= main
@@ -4956,7 +5022,7 @@ index 0000000..0198333
 +        snprintf(buf, sizeof(buf), "%s", me->shortName);
 +    else
 +        snprintf(buf, sizeof(buf), HOPTICS_NAME);
-+    lv_label_set_text(statusName, buf);
++    hxSetText(statusName, buf);
 +
 +    if (clockValid) {
 +        time_t t = nowTs;
@@ -4965,7 +5031,7 @@ index 0000000..0198333
 +        snprintf(buf, sizeof(buf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
 +    } else
 +        snprintf(buf, sizeof(buf), "--:--");
-+    lv_label_set_text(statusTime, buf);
++    hxSetText(statusTime, buf);
 +
 +    const char *sym = LV_SYMBOL_BATTERY_EMPTY;
 +    lv_color_t col = C_MUTED;
@@ -4982,7 +5048,7 @@ index 0000000..0198333
 +        snprintf(buf, sizeof(buf), "%s %u%%", sym, myBattery);
 +    } else
 +        snprintf(buf, sizeof(buf), "%s", sym);
-+    lv_label_set_text(statusBatt, buf);
++    hxSetText(statusBatt, buf);
 +    lv_obj_set_style_text_color(statusBatt, col, 0);
 +
 +    if (wifiOn) {
@@ -5007,12 +5073,12 @@ index 0000000..0198333
 +    for (const auto &c : convs)
 +        unread += c.unread;
 +    if (unread) {
-+        lv_label_set_text(statusMsg, ""); // unread count lives on the Chat tab badge
++        hxSetText(statusMsg, ""); // unread count lives on the Chat tab badge
 +        snprintf(buf, sizeof(buf), "%u", (unsigned)std::min<uint32_t>(unread, 99));
-+        lv_label_set_text(navBadge, buf);
++        hxSetText(navBadge, buf);
 +        lv_obj_remove_flag(navBadge, LV_OBJ_FLAG_HIDDEN);
 +    } else {
-+        lv_label_set_text(statusMsg, "");
++        hxSetText(statusMsg, "");
 +        lv_obj_add_flag(navBadge, LV_OBJ_FLAG_HIDDEN);
 +    }
 +}
@@ -5246,12 +5312,12 @@ index 0000000..0198333
 +    if (lastChUtil >= 0) {
 +        lv_label_set_text_fmt(homeChUtil, "%d%%", (int)lroundf(lastChUtil));
 +        lv_obj_set_style_text_color(homeChUtil, lastChUtil < 25 ? C_GREEN : lastChUtil < 50 ? C_AMBER : C_RED, 0);
-+        lv_label_set_text(homeChUtilSub, lastChUtil < 25 ? "quiet" : lastChUtil < 50 ? "busy" : "heavy");
++        hxSetText(homeChUtilSub, lastChUtil < 25 ? "quiet" : lastChUtil < 50 ? "busy" : "heavy");
 +    }
 +    if (lastAirUtil >= 0) {
 +        snprintf(buf, sizeof(buf), "%.1f%%", lastAirUtil);
-+        lv_label_set_text(homeAir, buf);
-+        lv_label_set_text(homeAirSub, "1 hr");
++        hxSetText(homeAir, buf);
++        hxSetText(homeAirSub, "1 hr");
 +    }
 +    lv_label_set_text_fmt(homeRate, "%u", (unsigned)pktThisMinute);
 +
@@ -5262,17 +5328,17 @@ index 0000000..0198333
 +            if (cityLabel(myNode, cb, sizeof(cb)))
 +                lv_label_set_text_fmt(homeLocCity, LV_SYMBOL_GPS "  %s", cb);
 +            else
-+                lv_label_set_text(homeLocCity, LV_SYMBOL_GPS "  Position fixed");
++                hxSetText(homeLocCity, LV_SYMBOL_GPS "  Position fixed");
 +            snprintf(buf, sizeof(buf), "%.5f, %.5f%s", me->lat / 1e7, me->lon / 1e7, me->alt ? "" : "");
 +            if (me->alt)
 +                lv_label_set_text_fmt(homeLocSub, "%s  -  %d m", buf, (int)me->alt);
 +            else
-+                lv_label_set_text(homeLocSub, buf);
++                hxSetText(homeLocSub, buf);
 +            lv_obj_remove_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
 +        } else if (hoptics::board::kGps && gpsMode >= 0) {
 +            // a board with a receiver: say why there is no position (and the card leads to the GPS switch)
-+            lv_label_set_text(homeLocCity, LV_SYMBOL_GPS "  No position yet");
-+            lv_label_set_text(homeLocSub, gpsMode == 1 ? "GPS on - waiting for a fix" : "GPS is off");
++            hxSetText(homeLocCity, LV_SYMBOL_GPS "  No position yet");
++            hxSetText(homeLocSub, gpsMode == 1 ? "GPS on - waiting for a fix" : "GPS is off");
 +            lv_obj_remove_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
 +        } else
 +            lv_obj_add_flag(homeLoc, LV_OBJ_FLAG_HIDDEN);
@@ -5286,7 +5352,7 @@ index 0000000..0198333
 +        snprintf(buf2, sizeof(buf2), "%s\n%.3f MHz  -  %u hops  -  %d dBm", buf, freqMHz, hopLimit, txPower);
 +    else
 +        snprintf(buf2, sizeof(buf2), "%s\n%u hops  -  %d dBm", buf, hopLimit, txPower);
-+    lv_label_set_text(homeRadio, buf2);
++    hxSetText(homeRadio, buf2);
 +
 +    // last heard: 3 most recent live entries with distinct senders
 +    int shown = 0;
@@ -5297,7 +5363,7 @@ index 0000000..0198333
 +            continue;
 +        seen[shown] = le.from;
 +        setBadge(homeLastBadge[shown], le.from);
-+        lv_label_set_text(homeLastName[shown], nodeLong(le.from, buf, sizeof(buf)));
++        hxSetText(homeLastName[shown], nodeLong(le.from, buf, sizeof(buf)));
 +        char ago[12];
 +        agoString(le.time, ago, sizeof(ago));
 +        if (le.hops == 0 && le.rssi != 0)
@@ -5306,7 +5372,7 @@ index 0000000..0198333
 +            snprintf(buf2, sizeof(buf2), "%dhop  %s", le.hops, ago);
 +        else
 +            snprintf(buf2, sizeof(buf2), "%s", ago);
-+        lv_label_set_text(homeLastInfo[shown], buf2);
++        hxSetText(homeLastInfo[shown], buf2);
 +        lv_obj_set_user_data(homeLast[shown], (void *)(uintptr_t)le.from);
 +        lv_obj_remove_flag(homeLast[shown], LV_OBJ_FLAG_HIDDEN);
 +        shown++;
@@ -5419,7 +5485,7 @@ index 0000000..0198333
 +        lv_obj_add_flag(liveEmpty, LV_OBJ_FLAG_HIDDEN);
 +    } else {
 +        lv_obj_remove_flag(liveEmpty, LV_OBJ_FLAG_HIDDEN);
-+        lv_label_set_text(liveEmpty, liveFilter == LF_MQTT ? "No MQTT traffic yet.\nNeeds Wi-Fi + the MQTT module, or\n'proxy to client' on a phone link."
++        hxSetText(liveEmpty, liveFilter == LF_MQTT ? "No MQTT traffic yet.\nNeeds Wi-Fi + the MQTT module, or\n'proxy to client' on a phone link."
 +                                                           : "Listening...\nPackets will appear here as they arrive.");
 +    }
 +    for (uint32_t i = 0; i < HOPTICS_LIVE_ROWS; i++) {
@@ -5430,8 +5496,8 @@ index 0000000..0198333
 +        }
 +        const LiveEntry &le = live[idx[i]];
 +        setBadge(r.badge, le.from);
-+        lv_label_set_text(r.name, nodeLong(le.from, buf, sizeof(buf)));
-+        lv_label_set_text(r.port, portTag(le.port));
++        hxSetText(r.name, nodeLong(le.from, buf, sizeof(buf)));
++        hxSetText(r.port, portTag(le.port));
 +        lv_color_t pc = portColor(le.port);
 +        lv_obj_set_style_text_color(r.port, pc, 0);
 +        lv_obj_set_style_bg_color(r.port, pc, 0);
@@ -5461,7 +5527,7 @@ index 0000000..0198333
 +        } else {
 +            lv_obj_set_style_border_width(r.row, 0, 0);
 +        }
-+        lv_label_set_text(r.meta, buf);
++        hxSetText(r.meta, buf);
 +        lv_obj_update_layout(r.port);
 +        lv_obj_align_to(r.meta, r.port, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
 +        {
@@ -5476,7 +5542,7 @@ index 0000000..0198333
 +            lv_obj_set_style_text_color(r.sig, snrColor(le.snr), 0);
 +        } else
 +            snprintf(buf, sizeof(buf), "-");
-+        lv_label_set_text(r.sig, buf);
++        hxSetText(r.sig, buf);
 +        lv_obj_align(r.sig, LV_ALIGN_RIGHT_MID, -6, 0);
 +        lv_obj_set_user_data(r.row, (void *)(uintptr_t)le.from);
 +        lv_obj_remove_flag(r.row, LV_OBJ_FLAG_HIDDEN);
@@ -5559,7 +5625,7 @@ index 0000000..0198333
 +        lv_obj_t *icon;
 +        if (key < kMaxChannels) {
 +            icon = makeBadge(r, 34, 34, &F20);
-+            lv_label_set_text(icon, "#");
++            hxSetText(icon, "#");
 +            lv_obj_set_style_bg_color(icon, key == 0 ? C_ME : C_CARD2, 0);
 +            lv_obj_set_style_text_color(icon, C_CYAN, 0);
 +            lv_obj_set_style_radius(icon, 17, 0);
@@ -5751,7 +5817,7 @@ index 0000000..0198333
 +        }
 +        const Node *n = findNode(sortedNodes[i]);
 +        setBadge(r.badge, n->num);
-+        lv_label_set_text(r.name, n->longName[0] ? n->longName : n->shortName);
++        hxSetText(r.name, n->longName[0] ? n->longName : n->shortName);
 +
 +        std::string sub = roleName(n->role);
 +        if (n->viaMqtt)
@@ -5773,17 +5839,17 @@ index 0000000..0198333
 +            snprintf(buf, sizeof(buf), "  -  %u%%", n->battery);
 +            sub += buf;
 +        }
-+        lv_label_set_text(r.sub, sub.c_str());
++        hxSetText(r.sub, sub.c_str());
 +
 +        if (n->hasSignal) {
 +            snprintf(buf, sizeof(buf), "%+.1f dB", n->snr);
 +            lv_obj_set_style_text_color(r.sig, snrColor(n->snr), 0);
 +        } else
 +            buf[0] = 0;
-+        lv_label_set_text(r.sig, buf);
++        hxSetText(r.sig, buf);
 +        lv_obj_align(r.sig, LV_ALIGN_TOP_RIGHT, -6, 5);
 +        agoString(recency(n), ago, sizeof(ago));
-+        lv_label_set_text(r.ago, ago);
++        hxSetText(r.ago, ago);
 +        lv_obj_align(r.ago, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
 +        bool online = recency(n) && nowTs - std::min(nowTs, n->lastHeard) <= kOnlineSecs;
 +        lv_obj_set_style_text_color(r.name, online ? C_TEXT : C_MUTED, 0);
@@ -5793,7 +5859,7 @@ index 0000000..0198333
 +    if (sortedNodes.size() > shown)
 +        lv_label_set_text_fmt(nodesMore, "+ %u more nodes", (unsigned)(sortedNodes.size() - shown));
 +    else if (sortedNodes.empty())
-+        lv_label_set_text(nodesMore, "No nodes heard yet");
++        hxSetText(nodesMore, "No nodes heard yet");
 +    else
 +        lv_label_set_text_fmt(nodesMore, "%u nodes", (unsigned)sortedNodes.size());
 +}
@@ -5952,7 +6018,7 @@ index 0000000..0198333
 +    lv_chart_refresh(statHopChart);
 +    char buf[200];
 +    snprintf(buf, sizeof(buf), "NODES BY HOPS AWAY  -  0 = direct  -  %u unknown", (unsigned)unknown);
-+    lv_label_set_text(statHopCaption, buf);
++    hxSetText(statHopCaption, buf);
 +
 +    // traffic mix
 +    uint32_t total = 0;
@@ -6005,7 +6071,7 @@ index 0000000..0198333
 +             "Packets heard: %u  (direct %u, MQTT %u)\nDirect neighbours: %u\nBest: %s %+.1f dB   Worst: %s %+.1f dB",
 +             (unsigned)pktTotal, (unsigned)pktDirect, (unsigned)pktMqtt, (unsigned)direct, b1, best ? best->snr : 0.0f, b2,
 +             worst ? worst->snr : 0.0f);
-+    lv_label_set_text(statTotals, buf);
++    hxSetText(statTotals, buf);
 +}
 +
 +// ================================================================= CHAT OVERLAY
@@ -6173,7 +6239,7 @@ index 0000000..0198333
 +        if (!b[0])
 +            continue;
 +        if (strcmp(lv_label_get_text(r.reach), b) != 0)
-+            lv_label_set_text(r.reach, b);
++            hxSetText(r.reach, b);
 +        lv_obj_remove_flag(r.reach, LV_OBJ_FLAG_HIDDEN);
 +    }
 +    if (chatReachBtn) {
@@ -6207,7 +6273,7 @@ index 0000000..0198333
 +{
 +    chatKey = key;
 +    char buf[64];
-+    lv_label_set_text(chatTitle, convTitle(key, buf, sizeof(buf)));
++    hxSetText(chatTitle, convTitle(key, buf, sizeof(buf)));
 +    Conv &c = convRef(key);
 +    c.unread = 0;
 +    if (cbs.conversationRead)
@@ -6325,17 +6391,17 @@ index 0000000..0198333
 +    const bool have = hoptics::Reach::get().find(reachId, m);
 +    if (!have) {
 +        // sent before the last restart, or pushed out by newer messages
-+        lv_label_set_text(reachText, "");
-+        lv_label_set_text(reachSum, "-");
-+        lv_label_set_text(reachSub, "Not tracked. Only the latest messages sent since the radio started are checked.");
++        hxSetText(reachText, "");
++        hxSetText(reachSum, "-");
++        hxSetText(reachSub, "Not tracked. Only the latest messages sent since the radio started are checked.");
 +        lv_obj_clean(reachBars);
 +        if (reachGw)
-+            lv_label_set_text(reachGw, "");
-+        lv_label_set_text(reachHelp, "");
++            hxSetText(reachGw, "");
++        hxSetText(reachHelp, "");
 +        return;
 +    }
 +    char b[200];
-+    lv_label_set_text(reachText, m.text);
++    hxSetText(reachText, m.text);
 +    lv_label_set_text_fmt(reachSum, "%u", (unsigned)m.gateways);
 +    {
 +        int h = m.maxHop();
@@ -6349,7 +6415,7 @@ index 0000000..0198333
 +            n += snprintf(b + n, sizeof(b) - n, "\nfurthest %d hop%s out", h, h == 1 ? "" : "s");
 +        if (m.self && n < sizeof(b))
 +            n += snprintf(b + n, sizeof(b) - n, "\n+ uploaded by this radio");
-+        lv_label_set_text(reachSub, b);
++        hxSetText(reachSub, b);
 +    }
 +
 +    // one bar per hop count, at least out to 3 hops so a short reach still reads as short
@@ -6406,16 +6472,16 @@ index 0000000..0198333
 +        }
 +        if (m.gateways > m.nGw)
 +            g += "\n+" + std::to_string(m.gateways - m.nGw) + " more";
-+        lv_label_set_text(reachGw, g.empty() ? "-" : g.c_str());
++        hxSetText(reachGw, g.empty() ? "-" : g.c_str());
 +    }
 +
 +    if (!m.gateways)
-+        lv_label_set_text(reachHelp, mqttUp ? "Waiting for gateways to upload it. Copies only come back if this radio "
++        hxSetText(reachHelp, mqttUp ? "Waiting for gateways to upload it. Copies only come back if this radio "
 +                                              "receives MQTT on the channel and 'Others may upload my messages' is on "
 +                                              "(Settings > MQTT)."
 +                                            : "Reach check needs Wi-Fi and MQTT. Set it up in Settings > MQTT.");
 +    else
-+        lv_label_set_text(reachHelp, "Direct = a gateway heard your radio itself. Each hop is one relay in between. "
++        hxSetText(reachHelp, "Direct = a gateway heard your radio itself. Each hop is one relay in between. "
 +                                     "Only gateways that upload to your MQTT server are counted.");
 +}
 +
@@ -6491,7 +6557,7 @@ index 0000000..0198333
 +            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
 +            if (ui->cbs.traceRoute)
 +                ui->cbs.traceRoute(ui->nodeOvNum);
-+            lv_label_set_text(ui->nodeOvTrace, "Trace route sent, waiting for reply (up to 60 s)...");
++            hxSetText(ui->nodeOvTrace, "Trace route sent, waiting for reply (up to 60 s)...");
 +            lv_obj_remove_flag(lv_obj_get_parent(ui->nodeOvTrace), LV_OBJ_FLAG_HIDDEN);
 +        },
 +        LV_EVENT_CLICKED, this);
@@ -6548,11 +6614,11 @@ index 0000000..0198333
 +    if (!n)
 +        return;
 +    char buf[400], tmp[64], ago[12];
-+    lv_label_set_text(nodeOvTitle, n->shortName);
++    hxSetText(nodeOvTitle, n->shortName);
 +    setBadge(nodeOvBadge, n->num);
-+    lv_label_set_text(nodeOvName, nodeLong(n->num, tmp, sizeof(tmp)));
++    hxSetText(nodeOvName, nodeLong(n->num, tmp, sizeof(tmp)));
 +    snprintf(buf, sizeof(buf), "!%08x  -  %s%s", (unsigned)n->num, roleName(n->role), n->hasKey ? "  -  " LV_SYMBOL_EYE_CLOSE : "");
-+    lv_label_set_text(nodeOvId, buf);
++    hxSetText(nodeOvId, buf);
 +
 +    std::string s;
 +    agoString((n->lastHeard > nowTs + 60) ? 0 : n->lastHeard, ago, sizeof(ago));
@@ -6601,10 +6667,10 @@ index 0000000..0198333
 +    }
 +    if (!s.empty() && s.back() == '\n')
 +        s.pop_back();
-+    lv_label_set_text(nodeOvInfo, s.c_str());
++    hxSetText(nodeOvInfo, s.c_str());
 +
 +    if (n->envTime) {
-+        lv_label_set_text(nodeOvEnvText, envLine(*n).c_str());
++        hxSetText(nodeOvEnvText, envLine(*n).c_str());
 +        lv_obj_remove_flag(nodeOvEnv, LV_OBJ_FLAG_HIDDEN);
 +    } else
 +        lv_obj_add_flag(nodeOvEnv, LV_OBJ_FLAG_HIDDEN);
@@ -6622,7 +6688,7 @@ index 0000000..0198333
 +    if (!mainScreen)
 +        return;
 +    if (nodeOvNum == target && !lv_obj_has_flag(nodeOv, LV_OBJ_FLAG_HIDDEN)) {
-+        lv_label_set_text(nodeOvTrace, text.c_str());
++        hxSetText(nodeOvTrace, text.c_str());
 +        lv_obj_remove_flag(lv_obj_get_parent(nodeOvTrace), LV_OBJ_FLAG_HIDDEN);
 +    } else {
 +        char buf[16];
@@ -6854,7 +6920,7 @@ index 0000000..0198333
 +    if (lo > hi) {
 +        lv_chart_set_axis_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
 +        if (cap)
-+            lv_label_set_text(cap, "No readings yet");
++            hxSetText(cap, "No readings yet");
 +    } else {
 +        // keep small wiggles small: a minimum visible span per quantity
 +        int32_t minSpan = k == 0 ? 400 : k == 1 ? 1000 : (pressInHg() ? 60 : 200);
@@ -6884,7 +6950,7 @@ index 0000000..0198333
 +        snprintf(b, sizeof(b), "%+ld\xC2\xB0" "F", lroundf(envTempOff * 9.0f / 50.0f));
 +    else
 +        snprintf(b, sizeof(b), "%+.1f\xC2\xB0" "C", envTempOff / 10.0f);
-+    lv_label_set_text(setEnvCorr, envTempOff ? b : "None");
++    hxSetText(setEnvCorr, envTempOff ? b : "None");
 +    fmtTemp(now, sizeof(now), envNow.temp);
 +    lv_label_set_text_fmt(setEnvCorrNote,
 +                          "Reads %s now. %s - or + until it matches a thermometer in the room: the sensors sit inside "
@@ -6971,31 +7037,31 @@ index 0000000..0198333
 +                     (unsigned)sharing, sharing == 1 ? "" : "s");
 +        else
 +            snprintf(c, sizeof(c), "No sensor on this radio. Readings other nodes share on the mesh show up here.");
-+        lv_label_set_text(homeEnvSub, c);
++        hxSetText(homeEnvSub, c);
 +        return;
 +    }
 +    if (!hoptics::board::kSensorSlots)
 +        lv_obj_remove_flag(nowRow, LV_OBJ_FLAG_HIDDEN);
 +    if (!envHasData()) {
-+        lv_label_set_text(homeEnvTemp, "--");
-+        lv_label_set_text(homeEnvUnit, "");
-+        lv_label_set_text(homeEnvHum, "");
-+        lv_label_set_text(homeEnvPress, "");
-+        lv_label_set_text(homeEnvSub, minutesUp >= 5 ? (touchInput ? "No sensor readings yet. Is the sensor board seated? Tap for more."
++        hxSetText(homeEnvTemp, "--");
++        hxSetText(homeEnvUnit, "");
++        hxSetText(homeEnvHum, "");
++        hxSetText(homeEnvPress, "");
++        hxSetText(homeEnvSub, minutesUp >= 5 ? (touchInput ? "No sensor readings yet. Is the sensor board seated? Tap for more."
 +                                                                   : "No sensor readings yet. Is the sensor board seated? Open for more.")
 +                                                     : "Starting the sensors - the first reading comes in about a minute.");
 +        lv_obj_add_flag(homeEnvChart, LV_OBJ_FLAG_HIDDEN);
 +        return;
 +    }
 +    fmtTemp(b, sizeof(b), envNow.temp, false);
-+    lv_label_set_text(homeEnvTemp, b);
-+    lv_label_set_text(homeEnvUnit, std::isnan(envNow.temp) ? "" : (tempF() ? "\xC2\xB0" "F" : "\xC2\xB0" "C"));
++    hxSetText(homeEnvTemp, b);
++    hxSetText(homeEnvUnit, std::isnan(envNow.temp) ? "" : (tempF() ? "\xC2\xB0" "F" : "\xC2\xB0" "C"));
 +    if (std::isnan(envNow.hum))
-+        lv_label_set_text(homeEnvHum, "");
++        hxSetText(homeEnvHum, "");
 +    else
 +        lv_label_set_text_fmt(homeEnvHum, "%.0f%% humidity", envNow.hum);
 +    if (std::isnan(envNow.press))
-+        lv_label_set_text(homeEnvPress, "");
++        hxSetText(homeEnvPress, "");
 +    else {
 +        fmtPress(b, sizeof(b), envNow.press);
 +        const char *tr = pressTrend(); // Home shows just the arrow
@@ -7005,7 +7071,7 @@ index 0000000..0198333
 +        else if (tr && strncmp(tr, LV_SYMBOL_DOWN, strlen(LV_SYMBOL_DOWN)) == 0)
 +            arrow = " " LV_SYMBOL_DOWN;
 +        snprintf(c, sizeof(c), "%s%s", b, arrow);
-+        lv_label_set_text(homeEnvPress, c);
++        hxSetText(homeEnvPress, c);
 +    }
 +    agoString(envNowTime, ago, sizeof(ago));
 +    if (!std::isnan(envNow.hum) && !std::isnan(envNow.temp)) {
@@ -7093,7 +7159,7 @@ index 0000000..0198333
 +    char a[32], b[32], ago[12];
 +    std::string meta;
 +    if (!envHasData()) {
-+        lv_label_set_text(envOvNow, "No readings yet");
++        hxSetText(envOvNow, "No readings yet");
 +        if (!hoptics::board::kSensorSlots)
 +            meta = "This radio has no environment sensor. Readings that other nodes share are listed below.";
 +        else
@@ -7103,7 +7169,7 @@ index 0000000..0198333
 +    } else {
 +        fmtTemp(a, sizeof(a), envNow.temp);
 +        if (std::isnan(envNow.hum))
-+            lv_label_set_text(envOvNow, a);
++            hxSetText(envOvNow, a);
 +        else
 +            lv_label_set_text_fmt(envOvNow, "%s   %.0f%%", a, envNow.hum);
 +        if (!std::isnan(envNow.temp) && !std::isnan(envNow.hum)) {
@@ -7132,7 +7198,7 @@ index 0000000..0198333
 +    if (envCfgKnown)
 +        meta += envShare ? std::string("\nShared on the mesh every ") + shareEveryText(envShareSecs)
 +                         : std::string("\nNot shared - shown here and on the web page only");
-+    lv_label_set_text(envOvMeta, meta.c_str());
++    hxSetText(envOvMeta, meta.c_str());
 +
 +    if (envDirty & 2) {
 +        for (int k = 0; k < 3; k++)
@@ -8079,11 +8145,11 @@ index 0000000..0198333
 +    hoptics::TileMap::get().wake(); // reads the saved-tile index if the map has not been opened yet
 +    mapNoteTick = 0;                // refresh the "Saved:" line right away
 +    if (!hasBluetooth)
-+        lv_label_set_text(setBtPin, "No Bluetooth on this device");
++        hxSetText(setBtPin, "No Bluetooth on this device");
 +    else if (bluetoothOn && btPin)
 +        lv_label_set_text_fmt(setBtPin, LV_SYMBOL_BLUETOOTH "  PIN  %06u", (unsigned)btPin);
 +    else
-+        lv_label_set_text(setBtPin, bluetoothOn ? LV_SYMBOL_BLUETOOTH "  PIN: random (set on pairing)" : "Bluetooth is off");
++        hxSetText(setBtPin, bluetoothOn ? LV_SYMBOL_BLUETOOTH "  PIN: random (set on pairing)" : "Bluetooth is off");
 +    if (wifiOn)
 +        lv_obj_add_state(setWifiSw, LV_STATE_CHECKED);
 +    else
@@ -8163,7 +8229,7 @@ index 0000000..0198333
 +        else
 +            snprintf(buf + n, sizeof(buf) - n, "\nStarted by: %s", rp.lastStart());
 +    }
-+    lv_label_set_text(setInfo, buf);
++    hxSetText(setInfo, buf);
 +    settingsLoading = false;
 +
 +    lv_obj_scroll_to_y(lv_obj_get_child(setOv, 1), 0, LV_ANIM_OFF);
@@ -8259,7 +8325,7 @@ index 0000000..0198333
 +{
 +    if (!mainScreen)
 +        return;
-+    lv_label_set_text(toastLabel, text);
++    hxSetText(toastLabel, text);
 +    lv_obj_set_user_data(toast, nullptr);
 +    lv_obj_remove_flag(toast, LV_OBJ_FLAG_HIDDEN);
 +    lv_obj_move_to_index(toast, -1);
@@ -8526,7 +8592,7 @@ index 0000000..0198333
 +                m.status = status;
 +    for (auto &b : bubbleRefs)
 +        if (b.requestId == requestId) {
-+            lv_label_set_text(b.status, statusGlyph(status));
++            hxSetText(b.status, statusGlyph(status));
 +            lv_obj_set_style_text_color(b.status, status == eFailed || status == eNoResponse ? C_RED : C_ME_META,
 +                                        0);
 +        }
@@ -8610,7 +8676,7 @@ index 0000000..0198333
 +    for (int i = 0; i < 4; i++) {
 +        char b[64];
 +        snprintf(b, sizeof(b), "%s  %s", items[i].ok ? LV_SYMBOL_OK : LV_SYMBOL_CLOSE, items[i].ok ? items[i].yes : items[i].no);
-+        lv_label_set_text(setMqttCheck[i], b);
++        hxSetText(setMqttCheck[i], b);
 +        lv_obj_set_style_text_color(setMqttCheck[i], items[i].ok ? C_GREEN : C_AMBER, 0);
 +    }
 +}
@@ -9239,7 +9305,7 @@ index 0000000..0198333
 +    }
 +    if (t) {
 +        if (strcmp(lv_label_get_text(mapNote), t) != 0)
-+            lv_label_set_text(mapNote, t);
++            hxSetText(mapNote, t);
 +        lv_obj_remove_flag(mapNote, LV_OBJ_FLAG_HIDDEN);
 +    } else {
 +        lv_obj_add_flag(mapNote, LV_OBJ_FLAG_HIDDEN);
@@ -9287,7 +9353,7 @@ index 0000000..0198333
 +        char b[48];
 +        snprintf(b, sizeof(b), "Saved: %u tiles, %u KB", (unsigned)s.savedTiles, (unsigned)s.savedKB);
 +        if (strcmp(lv_label_get_text(setMapInfo), b) != 0)
-+            lv_label_set_text(setMapInfo, b);
++            hxSetText(setMapInfo, b);
 +    }
 +}
 +
@@ -9343,7 +9409,7 @@ index 0000000..0198333
 +            snprintf(b, sizeof(b), "%.0f m", km * 1000);
 +        else
 +            snprintf(b, sizeof(b), "%g km", km);
-+        lv_label_set_text(mapRingLbl[i], b);
++        hxSetText(mapRingLbl[i], b);
 +        lv_obj_set_style_text_color(mapRingLbl[i], tilesOn ? C_MUTED : C_DIM, 0);
 +        lv_obj_set_pos(mapRingLbl[i], w / 2 + 3, h / 2 - r + 1);
 +        bool vis = r > 8 && r < std::max(w, h);
@@ -9386,7 +9452,7 @@ index 0000000..0198333
 +        lv_obj_set_style_opa(d, online ? LV_OPA_COVER : LV_OPA_40, 0);
 +        lv_obj_set_pos(d, x - 5, y - 5);
 +        lv_obj_set_user_data(d, (void *)(uintptr_t)nd->num);
-+        lv_label_set_text(lv_obj_get_child(d, 0), nd->shortName);
++        hxSetText(lv_obj_get_child(d, 0), nd->shortName);
 +        lv_obj_remove_flag(d, LV_OBJ_FLAG_HIDDEN);
 +
 +        lv_obj_t *ln = mapLinks[shown];
@@ -9423,7 +9489,7 @@ index 0000000..0198333
 +        snprintf(b, sizeof(b), "%d here, %d off map", shown, offscreen);
 +    else
 +        snprintf(b, sizeof(b), "%d nodes with GPS", shown);
-+    lv_label_set_text(mapRange, b);
++    hxSetText(mapRange, b);
 +    refreshMapNote();
 +}
 +
@@ -10013,7 +10079,7 @@ index 0000000..0198333
 +    }
 +    static const char *dots[3] = {"STEP 1 OF 3  -  REGION", "STEP 2 OF 3  -  NAME", "STEP 3 OF 3  -  LOOK"};
 +    static const char *shortDots[3] = {"STEP 1 OF 3", "STEP 2 OF 3", "STEP 3 OF 3"}; // landscape: on the title line
-+    lv_label_set_text(wizDots, LAND ? shortDots[step] : dots[step]);
++    hxSetText(wizDots, LAND ? shortDots[step] : dots[step]);
 +    setButtonText(wizNext, step == 2 ? LV_SYMBOL_OK " Finish" : "Next " LV_SYMBOL_RIGHT);
 +    // keys start on the step's own control (on the look page: the swatch picked now)
 +    lv_obj_t *first = step == 0 ? wizRegion : step == 1 ? wizLong : lv_obj_get_child(wizPages[2], 1 + wizTheme);
@@ -10137,7 +10203,7 @@ index 0000000..0198333
 +    std::string url = rp.issueUrl(repCrash, details);
 +    lv_qrcode_update(repQr, url.data(), (uint32_t)url.size());
 +
-+    lv_label_set_text(repTitle, repCrash ? "Crash report" : "Report a problem");
++    hxSetText(repTitle, repCrash ? "Crash report" : "Report a problem");
 +    if (rp.hasCrash()) {
 +        lv_color_t c = rp.crash().kind == hoptics::CK_POWER ? C_AMBER : C_RED;
 +        lv_obj_set_style_bg_color(repBanner, c, 0);
@@ -10152,7 +10218,7 @@ index 0000000..0198333
 +        else
 +            t = "Last crash:\n";
 +        t += rp.crashLine();
-+        lv_label_set_text(repBannerText, t.c_str());
++        hxSetText(repBannerText, t.c_str());
 +        lv_obj_remove_flag(repBanner, LV_OBJ_FLAG_HIDDEN);
 +        lv_obj_remove_flag(repClearBtn, LV_OBJ_FLAG_HIDDEN);
 +    } else {
@@ -10160,7 +10226,7 @@ index 0000000..0198333
 +        lv_obj_add_flag(repClearBtn, LV_OBJ_FLAG_HIDDEN);
 +    }
 +    // same details as in the code, so a photo of the screen carries them too
-+    lv_label_set_text(repText, details.c_str());
++    hxSetText(repText, details.c_str());
 +
 +    lv_obj_scroll_to_y(repScroll, 0, LV_ANIM_OFF);
 +    lv_obj_remove_flag(repOv, LV_OBJ_FLAG_HIDDEN);
@@ -10285,7 +10351,7 @@ index 0000000..0198333
 +    const bool fix = gpsMode == 1 && pos && myFixTime && nowTs - std::min(nowTs, myFixTime) < 180;
 +    char t[272], ago[8]; // each piece below is capped, and together they fit
 +    agoString(myFixTime, ago, sizeof(ago));
-+    lv_label_set_text(locState, fix            ? LV_SYMBOL_GPS " GPS fix"
++    hxSetText(locState, fix            ? LV_SYMBOL_GPS " GPS fix"
 +                                : gpsMode == 1 ? "No fix yet"
 +                                : gpsMode == 0 ? "GPS is off"
 +                                : noGps        ? "No GPS"
@@ -10305,7 +10371,7 @@ index 0000000..0198333
 +            snprintf(t + n, 84, "\n%s", cb); // "Town" or "12 km NE of Town"
 +    } else
 +        snprintf(t + n, 32, "\nNo position yet");
-+    lv_label_set_text(locInfo, t);
++    hxSetText(locInfo, t);
 +
 +    // nothing to show without a position, no switch without a receiver. Only a position the radio has sent
 +    // since it started goes out: the one stored in the node list may be days old, and the radio itself

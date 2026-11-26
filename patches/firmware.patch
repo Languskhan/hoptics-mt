@@ -893,7 +893,7 @@ index ea1d5dd..bbbb272 100644
          // Generate an implicit ACK towards ourselves (handled and processed only locally!) for this message.
          // We do this because packets are not rebroadcasted back into MQTT anymore and we assume that at least one node
 diff --git a/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini b/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
-index fc8c3be..4d90f88 100644
+index fc8c3be..822490d 100644
 --- a/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
 +++ b/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
 @@ -29,7 +29,10 @@ build_flags =
@@ -908,7 +908,15 @@ index fc8c3be..4d90f88 100644
    -D HAS_SCREEN=1
    -D SPI_FREQUENCY=75000000
  ;  -D COMPASS_SENSOR_DEBUG=1
-@@ -97,6 +100,14 @@ lib_deps =
+@@ -70,6 +73,7 @@ build_flags =
+   -D LGFX_DRIVER=LGFX_GENERIC
+   -D GFX_DRIVER_INC=\"graphics/LGFX/LGFX_GENERIC.h\"
+   -D VIEW_320x240
++  -D HOPTICS_STRIP_LINES=24 ; Hoptics: LVGL draws into a 24-line strip of internal RAM (PSRAM if short of it)
+   -D LGFX_PANEL=ST7789
+   -D LGFX_ROTATION=3
+   -D LGFX_CFG_HOST=SPI3_HOST
+@@ -97,6 +101,14 @@ lib_deps =
  custom_sdkconfig =
    ${esp32s3_base.custom_sdkconfig}
    ${device-ui_base.custom_sdkconfig}
@@ -924,7 +932,7 @@ index fc8c3be..4d90f88 100644
  extra_scripts =
    ${esp32s3_base.extra_scripts}
 diff --git a/variants/esp32s3/heltec_v4/platformio.ini b/variants/esp32s3/heltec_v4/platformio.ini
-index 73a863d..3215a82 100644
+index 73a863d..db12076 100644
 --- a/variants/esp32s3/heltec_v4/platformio.ini
 +++ b/variants/esp32s3/heltec_v4/platformio.ini
 @@ -69,7 +69,7 @@ build_flags =
@@ -936,7 +944,15 @@ index 73a863d..3215a82 100644
    -D LV_CACHE_DEF_SIZE=0
    -D LV_LVGL_H_INCLUDE_SIMPLE
    -D LV_CONF_INCLUDE_SIMPLE
-@@ -139,3 +139,11 @@ lib_deps = ${heltec_v4_base.lib_deps}
+@@ -86,6 +86,7 @@ build_flags =
+   -D LGFX_DRIVER=LGFX_HELTEC_V4_TFT
+   -D GFX_DRIVER_INC=\"graphics/LGFX/LGFX_HELTEC_V4_TFT.h\"
+   -D VIEW_240x320
++  -D HOPTICS_STRIP_LINES=24 ; Hoptics: LVGL draws into a 24-line strip of internal RAM (PSRAM if short of it)
+   -D DISPLAY_SET_RESOLUTION
+   -D DISPLAY_SIZE=240x320 ; portrait mode
+   -D LGFX_SPI_3WIRE=true
+@@ -139,3 +140,11 @@ lib_deps = ${heltec_v4_base.lib_deps}
  custom_sdkconfig =
    ${esp32s3_base.custom_sdkconfig}
    ${device-ui_base.custom_sdkconfig}
@@ -949,10 +965,18 @@ index 73a863d..3215a82 100644
 +  CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 +  CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 diff --git a/variants/esp32s3/heltec_v4_r8/platformio.ini b/variants/esp32s3/heltec_v4_r8/platformio.ini
-index bf7f08a..828b8da 100644
+index bf7f08a..6f357ab 100644
 --- a/variants/esp32s3/heltec_v4_r8/platformio.ini
 +++ b/variants/esp32s3/heltec_v4_r8/platformio.ini
-@@ -136,7 +136,11 @@ build_flags =
+@@ -83,6 +83,7 @@ build_flags =
+   -D LGFX_DRIVER=LGFX_HELTEC_V4_TFT
+   -D GFX_DRIVER_INC=\"graphics/LGFX/LGFX_HELTEC_V4_TFT.h\"
+   -D VIEW_240x320
++  -D HOPTICS_STRIP_LINES=24 ; Hoptics: LVGL draws into a 24-line strip of internal RAM (PSRAM if short of it)
+   -D DISPLAY_SET_RESOLUTION
+   -D DISPLAY_SIZE=240x320 ; portrait mode
+   -D LGFX_SPI_3WIRE=false
+@@ -136,7 +137,11 @@ build_flags =
    -D SPI_MISO=LGFX_PIN_MISO
    -D SPI_CS=3
    -D SDCARD_CS=SPI_CS
@@ -965,7 +989,7 @@ index bf7f08a..828b8da 100644
  
  lib_deps = ${heltec_v4_r8_base.lib_deps}
    ${device-ui_base.lib_deps}
-@@ -148,6 +152,14 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
+@@ -148,6 +153,14 @@ lib_deps = ${heltec_v4_r8_base.lib_deps}
  custom_sdkconfig =
    ${esp32s3_base.custom_sdkconfig}
    ${device-ui_base.custom_sdkconfig}
@@ -981,10 +1005,18 @@ index bf7f08a..828b8da 100644
  extra_scripts =
    ${heltec_v4_r8_base.extra_scripts}
 diff --git a/variants/esp32s3/t-deck/platformio.ini b/variants/esp32s3/t-deck/platformio.ini
-index 216ef82..0e0999a 100644
+index 216ef82..0cfea9f 100644
 --- a/variants/esp32s3/t-deck/platformio.ini
 +++ b/variants/esp32s3/t-deck/platformio.ini
-@@ -97,3 +97,26 @@ lib_deps =
+@@ -85,6 +85,7 @@ build_flags =
+ ;  -D GFX_DRIVER_INC=\"graphics/LVGL/LVGL_T_DECK.h\"
+ ;  -D LV_USE_ST7789=1
+   -D VIEW_320x240
++  -D HOPTICS_STRIP_LINES=24 ; Hoptics: LVGL draws into a 24-line strip of internal RAM (PSRAM if short of it)
+   -D USE_PACKET_API
+   -D MAP_FULL_REDRAW
+ ;  -D CUSTOM_TOUCH_DRIVER
+@@ -97,3 +98,26 @@ lib_deps =
  custom_sdkconfig =
    ${esp32s3_base.custom_sdkconfig}
    ${device-ui_base.custom_sdkconfig}
