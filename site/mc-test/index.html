@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>Hoptics-MC test builds</title>
+<title>Hoptics-MC public beta: Hoptics on MeshCore</title>
 <link rel="icon" href="../img/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../style.css">
 <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
@@ -19,13 +18,16 @@
 <body>
 <header class="site"><div class="wrap"><nav aria-label="Main"><a class="brand" href="../"><img src="../img/logo.svg" width="32" height="32" alt="">HOPTICS</a></nav></div></header>
 <main class="wrap" style="padding-top:40px;padding-bottom:60px">
-<p class="eyebrow mono">UNLISTED TEST PAGE</p>
-<h1 style="font-size:36px">Hoptics-MC test builds</h1>
-<p class="sub">The Hoptics screens on <b>MeshCore</b>, companion role. Early alpha for hardware testing.</p>
-<div class="warnbox"><b>Read first.</b> These are early alpha builds, tested so far on one T-Deck Plus and one M9 (v1.1). Installing one <b>erases the radio</b>: its MeshCore
+<p class="eyebrow mono">PUBLIC BETA 0.2.0</p>
+<h1 style="font-size:36px">Hoptics-MC</h1>
+<p class="sub">The Hoptics touch screens on <b>MeshCore</b>, companion role, for four boards. Works with the MeshCore apps.
+Live traffic, a map, chat with emoji, stats, repeater management, themes and a lock screen, plus a web page on your Wi-Fi
+for sending messages, charts, line of sight and updates. <a href="https://github.com/Languskhan/hoptics-mc">Source and releases on GitHub</a>.</p>
+<div class="warnbox"><b>Read first.</b> This is a beta: please report problems (the radio can save a log for you under More). A first install <b>erases the radio</b>: its MeshCore
 identity (keys), contacts and channels are wiped, and it starts as a new node. If you want to keep an existing MeshCore
 identity, export its private key in the MeshCore app first. To go back, flash any firmware from
-<a href="https://flasher.meshcore.io" style="color:#fdba74">flasher.meshcore.io</a>.</div>
+<a href="https://flasher.meshcore.io" style="color:#fdba74">flasher.meshcore.io</a>. Already on Hoptics-MC? Choose Install
+and say <b>no</b> to erasing: that updates it and keeps everything.</div>
 <div class="tb">
 <article class="card">
 <h3>LilyGO T-Deck / T-Deck Plus</h3>
@@ -39,9 +41,22 @@ identity, export its private key in the MeshCore app first. To go back, flash an
 <p>Keys only: arrows move, OK opens, Back goes back. Message bubble: Chats. House: Home. Second bubble: the Public channel. Map: Nodes, with distances. GPS pin: send an advert (hold it to send one across the whole mesh).</p>
 <esp-web-install-button manifest="m9/manifest.json"><button slot="activate" class="btn">Install on M9</button></esp-web-install-button>
 </article>
+<article class="card">
+<h3>Heltec V4 Expansion Kit</h3>
+<p class="ver mono">companion</p>
+<p>The V4 with the 2.8" touch screen, portrait. Type with the on-screen keyboard. Hold BOOT while plugging in if Chrome doesn't see it.</p>
+<esp-web-install-button manifest="v4/manifest.json"><button slot="activate" class="btn">Install on Heltec V4</button></esp-web-install-button>
+</article>
+<article class="card">
+<h3>Heltec V4-R8 Expansion Kit V2</h3>
+<p class="ver mono">companion</p>
+<p>The V4-R8 kit with its touch screen, portrait. Type with the on-screen keyboard. Hold BOOT while plugging in if Chrome doesn't see it.</p>
+<esp-web-install-button manifest="v4r8/manifest.json"><button slot="activate" class="btn">Install on Heltec V4-R8</button></esp-web-install-button>
+</article>
 </div>
-<p class="sub" style="margin-top:24px">Chrome or Edge on a computer, with a USB data cable. After installing, set your region preset in
-<b>More → Radio</b> so it matches your mesh (Sacramento / Foothills is listed as SMF), and pair the MeshCore app with the PIN shown under <b>More → Phone app</b>.</p>
+<p class="sub" style="margin-top:24px">Chrome or Edge on a computer, with a USB data cable. After installing, open <b>More → Radio</b>: pick your country's radio band, then
+your mesh's preset (or its own settings under Custom radio; Sacramento / Foothills is listed as SMF). Set your time zone under
+<b>More → Screen</b>, and pair the MeshCore app with the PIN shown under <b>More → Phone app</b>.</p>
 </main>
 </body>
 </html>
