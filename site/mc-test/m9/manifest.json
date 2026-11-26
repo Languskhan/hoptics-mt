@@ -1,6 +1,6 @@
 {
   "name": "Hoptics-MC companion (Elecrow ThinkNode M9)",
-  "version": "0.1.0-alpha+presets",
+  "version": "0.1.0-alpha+hwfix",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 0,
   "builds": [
