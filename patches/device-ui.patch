@@ -737,10 +737,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..82bc42b
+index 0000000..8110a3d
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,671 @@
+@@ -0,0 +1,672 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -943,7 +943,7 @@ index 0000000..82bc42b
 +        // MQTT module + "OK to MQTT" (LoRa config) + downlink on the primary channel. pass nullptr keeps the saved one.
 +        // Only the parts that changed are sent; the radio restarts to apply them.
 +        std::function<void(bool enabled, const char *server, const char *user, const char *pass, const char *root,
-+                           bool okToMqtt, bool downlink)>
++                           bool okToMqtt, bool downlink, bool uplink)>
 +            setMqtt;
 +    };
 +
@@ -987,6 +987,7 @@ index 0000000..82bc42b
 +    void setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root);
 +    void setOkToMqtt(bool on);
 +    void setDownlink(bool on); // primary channel downlink
++    void setUplink(bool on);   // primary channel uplink (a gateway: what this radio hears goes to the server)
 +    // reach check (HopticsReach.h): one of our messages, opened from its chat bubble
 +    void openReach(uint32_t requestId);
 +    void closeReach(void);
@@ -1259,8 +1260,8 @@ index 0000000..82bc42b
 +    bool wifiHasPsk = false;
 +    // MQTT / reach check
 +    lv_obj_t *setMqttSw = nullptr, *setMqttServer = nullptr, *setMqttUser = nullptr, *setMqttPass = nullptr,
-+             *setMqttRoot = nullptr, *setOkMqttSw = nullptr, *setDownSw = nullptr, *setMqttCheck[4] = {};
-+    bool mqttEnabled = false, mqttHasPass = false, okToMqtt = false, downlinkOn = false;
++             *setMqttRoot = nullptr, *setOkMqttSw = nullptr, *setDownSw = nullptr, *setUpSw = nullptr, *setMqttCheck[4] = {};
++    bool mqttEnabled = false, mqttHasPass = false, okToMqtt = false, downlinkOn = false, uplinkOn = false;
 +    char mqttServer[65] = {0}, mqttUser[65] = {0}, mqttRoot[33] = {0};
 +    lv_obj_t *reachOv = nullptr, *reachOvTitle = nullptr, *reachText = nullptr, *reachSum = nullptr, *reachSub = nullptr,
 +             *reachBars = nullptr, *reachGw = nullptr, *reachHelp = nullptr;
@@ -3453,10 +3454,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..a601fa9
+index 0000000..d6fbc91
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7607 @@
+@@ -0,0 +1,7617 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -7905,6 +7906,7 @@ index 0000000..a601fa9
 +    }
 +    switchRow(cmq, "Others may upload my messages", &setOkMqttSw);
 +    switchRow(cmq, "Receive MQTT on the primary channel", &setDownSw);
++    switchRow(cmq, "Upload what I hear (gateway)", &setUpSw);
 +    lv_obj_t *msave = flatButton(cmq, LV_SYMBOL_SAVE " Save & restart", C_CYAN, LV_PCT(100), 34);
 +    stop(msave);
 +    lv_obj_add_event_cb(
@@ -7931,7 +7933,8 @@ index 0000000..a601fa9
 +                ui->cbs.setMqtt(lv_obj_has_state(ui->setMqttSw, LV_STATE_CHECKED), lv_textarea_get_text(ui->setMqttServer),
 +                                lv_textarea_get_text(ui->setMqttUser), pass[0] ? pass : nullptr,
 +                                lv_textarea_get_text(ui->setMqttRoot), lv_obj_has_state(ui->setOkMqttSw, LV_STATE_CHECKED),
-+                                lv_obj_has_state(ui->setDownSw, LV_STATE_CHECKED));
++                                lv_obj_has_state(ui->setDownSw, LV_STATE_CHECKED),
++                                lv_obj_has_state(ui->setUpSw, LV_STATE_CHECKED));
 +            setButtonText(b, "Restarting...");
 +            ui->showToast(LV_SYMBOL_REFRESH " MQTT saved - restarting", 6000);
 +        },
@@ -7947,8 +7950,10 @@ index 0000000..a601fa9
 +                          "4. Turn on 'Receive MQTT on the primary channel'. That is how the copies of your messages "
 +                          "come back to this radio.\n"
 +                          "5. Save. The list above turns green when it's working.\n"
-+                          "This radio does not need to upload (uplink) itself. Traffic from MQTT shows on screen but "
-+                          "is never sent out over LoRa. Leave the password blank to keep the saved one.");
++                          "A home base that should feed the server (a gateway) turns on 'Upload what I hear'; many "
++                          "regional groups also ask gateways to turn receiving off. Portable radios: leave uploading off. "
++                          "Traffic from MQTT shows on screen but is never sent out over LoRa. Leave the password blank "
++                          "to keep the saved one.");
 +    lv_obj_set_width(mqh, LV_PCT(100));
 +    lv_label_set_long_mode(mqh, LV_LABEL_LONG_MODE_WRAP);
 +    stop(mqh); // keys scroll down to the setup steps
@@ -8253,6 +8258,7 @@ index 0000000..a601fa9
 +        lv_obj_add_state(setDownSw, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setDownSw, LV_STATE_CHECKED);
++    lv_obj_set_state(setUpSw, LV_STATE_CHECKED, uplinkOn);
 +    lv_textarea_set_text(setMqttServer, mqttServer);
 +    lv_textarea_set_text(setMqttUser, mqttUser);
 +    lv_textarea_set_text(setMqttRoot, mqttRoot);
@@ -8727,6 +8733,11 @@ index 0000000..a601fa9
 +{
 +    okToMqtt = on;
 +    refreshMqttChecklist();
++}
++
++void HopticsUI::setUplink(bool on)
++{
++    uplinkOn = on;
 +}
 +
 +void HopticsUI::setDownlink(bool on)
@@ -11066,10 +11077,10 @@ index 0000000..a601fa9
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..4f952af
+index 0000000..4b744ef
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,901 @@
+@@ -0,0 +1,904 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -11458,11 +11469,13 @@ index 0000000..4f952af
 +        armRebootFallback();
 +    };
 +    cb.setMqtt = [this](bool enabled, const char *server, const char *user, const char *pass, const char *root, bool okToMqtt,
-+                        bool downlink) {
++                        bool downlink, bool uplink) {
 +        // only what changed: each of these restarts the radio, and the restart is delayed long enough for all three
-+        if (haveChannel0 && channel0.has_settings && channel0.settings.downlink_enabled != downlink) {
++        if (haveChannel0 && channel0.has_settings &&
++            (channel0.settings.downlink_enabled != downlink || channel0.settings.uplink_enabled != uplink)) {
 +            meshtastic_Channel c = channel0;
 +            c.settings.downlink_enabled = downlink;
++            c.settings.uplink_enabled = uplink;
 +            channel0 = c;
 +            controller->sendConfig(c, ownNode);
 +        }
@@ -11701,6 +11714,7 @@ index 0000000..4f952af
 +        channel0 = ch;
 +        haveChannel0 = true;
 +        ui.setDownlink(ch.has_settings && ch.settings.downlink_enabled);
++        ui.setUplink(ch.has_settings && ch.settings.uplink_enabled);
 +    }
 +    ui.setChannel((uint8_t)ch.index, ch.has_settings ? ch.settings.name : "", ch.role != meshtastic_Channel_Role_DISABLED);
 +    if (ch.index == 0)
