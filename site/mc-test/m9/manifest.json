@@ -1,6 +1,6 @@
 {
   "name": "Hoptics-MC companion (Elecrow ThinkNode M9)",
-  "version": "0.2.3-beta",
+  "version": "0.2.5-beta",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 0,
   "builds": [
@@ -8,7 +8,7 @@
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "hoptics-mc-elecrow-thinknode-m9-companion-0.2.3-beta.factory.bin",
+          "path": "hoptics-mc-elecrow-thinknode-m9-companion-0.2.5-beta.factory.bin",
           "offset": 0
         }
       ]
