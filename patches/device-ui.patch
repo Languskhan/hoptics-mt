@@ -12,6 +12,72 @@ index 15806b2..597a359 100644
      virtual void updateFileinfo(const meshtastic_FileInfo &fileinfo) {}
      virtual void updateRingtone(const char rtttl[231]) {}
  
+diff --git a/include/graphics/driver/LGFXDriver.h b/include/graphics/driver/LGFXDriver.h
+index 98d4bc7..05dbb07 100644
+--- a/include/graphics/driver/LGFXDriver.h
++++ b/include/graphics/driver/LGFXDriver.h
+@@ -466,6 +466,53 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
+         touched = lgfx->getTouch(&touchX, &touchY);
+     }
+ #endif
++#if defined(HOPTICS_UI) && defined(CUSTOM_TOUCH_DRIVER)
++    // Hoptics: steady the cheap I2C touch controllers (Heltec V4 CHSC6X, T-Deck GT911). A finger is noisy: it
++    // drops out for a read now and then (LVGL saw a release and a new press: extra taps) and its position wobbles
++    // or spikes (LVGL saw a drag: the screen jumped and scrolled under a tap).
++    constexpr int16_t kJitter = 4;  // px: smaller moves are noise, the point holds still
++    constexpr int16_t kSpike = 40;  // px in one read: believed only if the next read agrees
++    constexpr uint8_t kMisses = 2;  // empty reads in a row before the finger counts as lifted
++    static bool down = false;
++    static uint8_t misses = 0;
++    static lv_point_t last = {0, 0}, pending = {0, 0};
++    static bool havePending = false;
++    if (!touched) {
++        if (down && ++misses < kMisses) {
++            data->state = LV_INDEV_STATE_PR; // a dropped read: the finger is still there
++            data->point = last;
++            return;
++        }
++        down = false;
++        havePending = false;
++        data->state = LV_INDEV_STATE_REL;
++        data->point = last;
++        return;
++    }
++    misses = 0;
++    const lv_point_t p = {(int32_t)touchX, (int32_t)touchY};
++    if (!down) { // a new press lands where it is
++        down = true;
++        last = p;
++        havePending = false;
++    } else {
++        const int32_t dx = LV_ABS(p.x - last.x), dy = LV_ABS(p.y - last.y);
++        if (dx > kSpike || dy > kSpike) {
++            if (havePending && LV_ABS(p.x - pending.x) <= kSpike / 3 && LV_ABS(p.y - pending.y) <= kSpike / 3) {
++                last = p; // two reads agree: a real fast move
++                havePending = false;
++            } else {
++                pending = p; // one wild read: hold still until the next one says the same
++                havePending = true;
++            }
++        } else if (dx > kJitter || dy > kJitter) {
++            last = p;
++            havePending = false;
++        }
++    }
++    data->state = LV_INDEV_STATE_PR;
++    data->point = last;
++#else
+     if (!touched) {
+         data->state = LV_INDEV_STATE_REL;
+     } else {
+@@ -475,6 +522,7 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
+ 
+         ILOG_DEBUG("Touch(%hd/%hd)", touchX, touchY);
+     }
++#endif
+ }
+ #endif
+ 
 diff --git a/include/graphics/view/TFT/HopticsBoard.h b/include/graphics/view/TFT/HopticsBoard.h
 new file mode 100644
 index 0000000..1eff63a
