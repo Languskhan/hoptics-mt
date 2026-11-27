@@ -590,6 +590,8 @@ int main(int argc, char **argv)
         lv_obj_scroll_to_view_recursive(ui.setPresetDd, LV_ANIM_OFF);
         pump(20);
         shot("09c_settings_radio_unset");
+        pickRegion(1); // US picked for the first time on the device: Long Turbo, as Meshtastic 2.8 does
+        rexpect(sentRegion == 1 && sentPreset == 9, "first US pick: Long Turbo");
         ui.setRadio(1, "US", 16, "MediumTurbo", true, 3, 27, 920.25f);
         pump(20);
         rexpect(!lv_obj_has_state(ui.setPresetDd, LV_STATE_DISABLED) && opts().find("Medium Turbo") != std::string::npos &&
@@ -635,6 +637,34 @@ int main(int argc, char **argv)
         lv_obj_send_event(ui.setHamSw, LV_EVENT_VALUE_CHANGED, nullptr);
         pump(20);
         rexpect(sentLic == 0 && !ui.licensed, "licensed: off at once");
+        int sentTx = -1, sentSig = -1;
+        ui.cbs.setTransmit = [&](bool on) { sentTx = on; };
+        ui.cbs.setSigPolicy = [&](int p) { sentSig = p; };
+        ui.setTransmit(true);
+        ui.setSigPolicy(0);
+        ui.openSettings();
+        pump(20);
+        rexpect(lv_obj_has_state(ui.setTxSw, LV_STATE_CHECKED) && !lv_obj_has_flag(ui.setSigRow, LV_OBJ_FLAG_HIDDEN),
+                "transmit on, signed-packets row shown");
+        lv_obj_remove_state(ui.setTxSw, LV_STATE_CHECKED);
+        lv_obj_send_event(ui.setTxSw, LV_EVENT_VALUE_CHANGED, nullptr);
+        pump(20);
+        rexpect(sentTx == 0 && !ui.txEnabled && toastHas("Receive only"), "receive-only mode");
+        lv_dropdown_set_selected(ui.setSigDd, 2);
+        lv_obj_send_event(ui.setSigDd, LV_EVENT_VALUE_CHANGED, nullptr);
+        pump(20);
+        rexpect(sentSig == 2 && toastHas("Strict"), "signed packets: strict");
+        lv_obj_scroll_to_view_recursive(ui.setSigDd, LV_ANIM_OFF);
+        pump(300);
+        shot("09f_settings_transmit_signing");
+        ui.closeSettings();
+        ui.selectTab(HopticsUI::T_HOME);
+        pump(50);
+        rexpect(strstr(lv_label_get_text(ui.homeRadio), "Transmit off") != nullptr, "Home says Transmit off");
+        ui.setTransmit(true);
+        ui.setSigPolicy(0);
+        ui.cbs.setTransmit = nullptr;
+        ui.cbs.setSigPolicy = nullptr;
         ui.cbs.setRegion = nullptr;
         ui.cbs.setPreset = nullptr;
         ui.cbs.setLicensed = nullptr;

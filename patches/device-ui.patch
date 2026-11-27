@@ -737,10 +737,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..b988f89
+index 0000000..82bc42b
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,665 @@
+@@ -0,0 +1,671 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -913,6 +913,8 @@ index 0000000..b988f89
 +        std::function<void(int role)> setRole;
 +        std::function<void(int region, int preset)> setRegion; // the preset: one the new region allows
 +        std::function<void(bool on)> setLicensed;               // User.is_licensed (ham operator mode)
++        std::function<void(bool on)> setTransmit;               // LoRaConfig.tx_enabled (off: receive only)
++        std::function<void(int policy)> setSigPolicy;           // SecurityConfig.packet_signature_policy 0..2
 +        std::function<void(int preset)> setPreset;
 +        std::function<void(bool on)> setBluetooth;
 +        // Wi-Fi from the screen; psk == nullptr keeps the saved password. The radio restarts to apply it.
@@ -991,6 +993,8 @@ index 0000000..b988f89
 +    void setLnaMode(int mode); // FEM_LNA_Mode: 0 off, 1 on, 2 not present, 3 auto
 +    void setGpsMode(int mode);
 +    void setLicensed(bool on); // our node's User.is_licensed
++    void setTransmit(bool on); // LoRaConfig.tx_enabled
++    void setSigPolicy(int p);  // SecurityConfig.packet_signature_policy
 +    void refreshRadioSettings(void); // region / preset dropdowns from region, preset // PositionConfig.GpsMode: 0 disabled, 1 enabled, 2 not present
 +    // message sounds offered in Settings (picked from device-ui's Meshtastic tone library)
 +    static constexpr int kToneCount = 8;
@@ -1265,7 +1269,9 @@ index 0000000..b988f89
 +    uint32_t chatReachId = 0;
 +    int lnaMode = 2; // not present until the radio says otherwise
 +    lv_obj_t *setGpsRow = nullptr, *setGpsSw = nullptr;
-+    lv_obj_t *setHamSw = nullptr;
++    lv_obj_t *setHamSw = nullptr, *setTxSw = nullptr, *setSigDd = nullptr, *setSigRow = nullptr;
++    bool txEnabled = true; // LoRaConfig.tx_enabled
++    int sigPolicy = -1;     // SecurityConfig.packet_signature_policy; -1: not reported (no row)
 +    bool licensed = false;     // our User.is_licensed
 +    uint32_t hamArmedUntil = 0; // licensed mode asks twice: the first flip arms it for 5 s
 +    int gpsMode = -1; // not reported yet: no GPS switch
@@ -1408,10 +1414,10 @@ index 0000000..b988f89
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..c6818b1
+index 0000000..b747d18
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,110 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1452,6 +1458,7 @@ index 0000000..c6818b1
 +    void updateChannelConfig(const meshtastic_Channel &ch) override;
 +    void updateDeviceConfig(const meshtastic_Config_DeviceConfig &cfg) override;
 +    void updateLoRaConfig(const meshtastic_Config_LoRaConfig &cfg) override;
++    void updateSecurityConfig(const meshtastic_Config_SecurityConfig &cfg) override;
 +    void updatePositionConfig(const meshtastic_Config_PositionConfig &cfg) override;
 +    void updateBluetoothConfig(const meshtastic_Config_BluetoothConfig &cfg, uint32_t id = 0) override;
 +    void updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg) override;
@@ -1492,6 +1499,8 @@ index 0000000..c6818b1
 +    HopticsUI ui;
 +    meshtastic_DeviceUIConfig uiCfg{};
 +    meshtastic_Config_LoRaConfig lora{};
++    meshtastic_Config_SecurityConfig security{};
++    bool haveSecurity = false;
 +    meshtastic_Config_DeviceConfig device{};
 +    meshtastic_Config_BluetoothConfig bluetooth{};
 +    meshtastic_Config_NetworkConfig network{};
@@ -3444,10 +3453,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..9829c06
+index 0000000..a601fa9
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7535 @@
+@@ -0,0 +1,7607 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -5322,7 +5331,7 @@ index 0000000..9829c06
 +    lv_label_set_text_fmt(homeRateSub, "%u total", (unsigned)pktTotal);
 +    refreshHomeEnv();
 +
-+    snprintf(buf, sizeof(buf), "%s  -  %s", regionName, presetName);
++    snprintf(buf, sizeof(buf), "%s  -  %s%s", regionName, presetName, txEnabled ? "" : "  -  Transmit off");
 +    char buf2[160];
 +    if (freqMHz > 0)
 +        snprintf(buf2, sizeof(buf2), "%s\n%.3f MHz  -  %u hops  -  %d dBm", buf, freqMHz, hopLimit, txPower);
@@ -7506,7 +7515,7 @@ index 0000000..9829c06
 +    r = settingsRow(ci, "Long name");
 +    setLong = lv_textarea_create(r);
 +    lv_textarea_set_one_line(setLong, true);
-+    lv_textarea_set_max_length(setLong, 39);
++    lv_textarea_set_max_length(setLong, 24); // Meshtastic 2.8: 24 bytes (saving trims longer UTF-8)
 +    ctlWidth(setLong);
 +    styleTextarea(setLong);
 +    stop(setLong);
@@ -7605,7 +7614,9 @@ index 0000000..9829c06
 +                return;
 +            }
 +            const std::vector<int> ok = presetsExact(v);
-+            const int p = std::find(ok.begin(), ok.end(), ui->preset) != ok.end() ? ui->preset : defaultPresetFor(v);
++            int p = std::find(ok.begin(), ok.end(), ui->preset) != ok.end() ? ui->preset : defaultPresetFor(v);
++            if (ui->region == 0 && v == 1)
++                p = 9; // US picked for the first time: Long Turbo, the 2.8 default on the device screen
 +            ui->cbs.setRegion(v, p);
 +            ui->showToast(LV_SYMBOL_OK " Region set");
 +        },
@@ -7694,6 +7705,58 @@ index 0000000..9829c06
 +            ui->showToast(on ? LV_SYMBOL_OK " Licensed ham mode on" : LV_SYMBOL_OK " Licensed ham mode off");
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
++
++    // transmit: off = receive only (Meshtastic 2.8's receive-only mode; Home says "Transmit off")
++    lv_obj_t *tr = plain(cr);
++    lv_obj_set_size(tr, LV_PCT(100), 30);
++    row(tr, 6);
++    lv_obj_t *tl = label(tr, &F14, C_TEXT, "Transmit");
++    lv_obj_set_flex_grow(tl, 1);
++    oneLine(tl);
++    setTxSw = lv_switch_create(tr);
++    stop(setTxSw);
++    lv_obj_set_style_bg_color(setTxSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    lv_obj_add_event_cb(
++        setTxSw,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            const bool on = lv_obj_has_state(ui->setTxSw, LV_STATE_CHECKED);
++            if (ui->cbs.setTransmit)
++                ui->cbs.setTransmit(on);
++            ui->txEnabled = on;
++            ui->dirtyHome = true;
++            ui->showToast(on ? LV_SYMBOL_OK " Transmit on" : LV_SYMBOL_WARNING " Receive only: this radio sends nothing");
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++
++    // signed packets (Meshtastic 2.8 packet signature policy): which unsigned packets are still accepted
++    setSigRow = settingsRow(cr, "Signed packets");
++    setSigDd = lv_dropdown_create(setSigRow);
++    ctlWidth(setSigDd);
++    lv_dropdown_set_options(setSigDd, "Compatible\nBalanced\nStrict");
++    styleDropdown(setSigDd);
++    stop(setSigDd);
++    lv_obj_add_event_cb(
++        setSigDd,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            static const char *WHAT[3] = {LV_SYMBOL_OK " Compatible: older nodes still heard",
++                                          LV_SYMBOL_OK " Balanced: signers must keep signing",
++                                          LV_SYMBOL_WARNING " Strict: only signed packets"};
++            const int p = (int)lv_dropdown_get_selected(ui->setSigDd);
++            if (p == ui->sigPolicy || p > 2)
++                return;
++            if (ui->cbs.setSigPolicy)
++                ui->cbs.setSigPolicy(p);
++            ui->sigPolicy = p;
++            ui->showToast(WHAT[p], 6000);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++    lv_obj_add_flag(setSigRow, LV_OBJ_FLAG_HIDDEN);
 +
 +    // wi-fi
 +    lv_obj_t *cwf = card(body, "WI-FI");
@@ -8203,6 +8266,12 @@ index 0000000..9829c06
 +        lv_dropdown_set_selected(setLnaDd, lnaMode == 3 ? 0 : (lnaMode == 1 ? 1 : 2));
 +    }
 +    refreshRadioSettings();
++    lv_obj_set_state(setTxSw, LV_STATE_CHECKED, txEnabled);
++    if (sigPolicy >= 0 && sigPolicy <= 2) {
++        lv_obj_remove_flag(setSigRow, LV_OBJ_FLAG_HIDDEN);
++        lv_dropdown_set_selected(setSigDd, sigPolicy);
++    } else
++        lv_obj_add_flag(setSigRow, LV_OBJ_FLAG_HIDDEN);
 +    if (licensed)
 +        lv_obj_add_state(setHamSw, LV_STATE_CHECKED);
 +    else
@@ -8701,6 +8770,16 @@ index 0000000..9829c06
 +void HopticsUI::setLicensed(bool on)
 +{
 +    licensed = on;
++}
++void HopticsUI::setTransmit(bool on)
++{
++    if (on != txEnabled)
++        dirtyHome = true;
++    txEnabled = on;
++}
++void HopticsUI::setSigPolicy(int p)
++{
++    sigPolicy = p;
 +}
 +
 +// the region and preset dropdowns. No region yet: the radio may only use Long Fast, so the preset waits for one.
@@ -9956,7 +10035,7 @@ index 0000000..9829c06
 +    label(wizPages[1], &F12, C_MUTED, "Long name");
 +    wizLong = lv_textarea_create(wizPages[1]);
 +    lv_textarea_set_one_line(wizLong, true);
-+    lv_textarea_set_max_length(wizLong, 39);
++    lv_textarea_set_max_length(wizLong, 24);
 +    lv_obj_set_width(wizLong, LV_PCT(100));
 +    styleTextarea(wizLong);
 +    stop(wizLong);
@@ -10098,7 +10177,9 @@ index 0000000..9829c06
 +            cbs.setTheme(wizTheme);
 +        if (reg != 0 && cbs.setRegion && !isHamRegion(reg)) {
 +            const std::vector<int> ok = presetsExact(reg);
-+            cbs.setRegion(reg, std::find(ok.begin(), ok.end(), preset) != ok.end() ? preset : defaultPresetFor(reg));
++            const int p = region == 0 && reg == 1 ? 9 /* Long Turbo: the 2.8 default for a first US pick */
++                          : std::find(ok.begin(), ok.end(), preset) != ok.end() ? preset : defaultPresetFor(reg);
++            cbs.setRegion(reg, p);
 +            showToast(LV_SYMBOL_OK " Saved. Your region is set.", 6000);
 +        } else if (isHamRegion(reg)) {
 +            showToast(LV_SYMBOL_WARNING " Saved. Ham bands: Settings > Radio > Licensed ham mode", 8000);
@@ -10985,10 +11066,10 @@ index 0000000..9829c06
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..713e6bd
+index 0000000..4f952af
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,872 @@
+@@ -0,0 +1,901 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -11255,8 +11336,13 @@ index 0000000..713e6bd
 +        meshtastic_User u = myUser;
 +        strncpy(u.short_name, s, sizeof(u.short_name) - 1);
 +        u.short_name[sizeof(u.short_name) - 1] = 0;
-+        strncpy(u.long_name, l, sizeof(u.long_name) - 1);
-+        u.long_name[sizeof(u.long_name) - 1] = 0;
++        // Meshtastic 2.8: a long name is at most 24 bytes of UTF-8; cut at a character boundary
++        size_t n = strnlen(l, 24);
++        if (l[n] != 0)
++            while (n > 0 && ((uint8_t)l[n] & 0xC0) == 0x80)
++                n--;
++        memcpy(u.long_name, l, n);
++        u.long_name[n] = 0;
 +        controller->sendConfig(u, ownNode);
 +    };
 +    cb.setRole = [this](int r) {
@@ -11293,6 +11379,22 @@ index 0000000..713e6bd
 +        controller->sendConfig(std::move(l), ownNode);
 +        pushRadioInfo();
 +        repushRadioSoon();
++    };
++    cb.setTransmit = [this](bool on) {
++        if (!haveLora)
++            return;
++        meshtastic_Config_LoRaConfig l = lora;
++        l.tx_enabled = on;
++        lora = l;
++        controller->sendConfig(std::move(l), ownNode);
++    };
++    cb.setSigPolicy = [this](int p) {
++        if (!haveSecurity)
++            return;
++        meshtastic_Config_SecurityConfig sc = security; // keys and admin keys as the radio has them
++        sc.packet_signature_policy = (meshtastic_Config_SecurityConfig_PacketSignaturePolicy)p;
++        security = sc;
++        controller->sendConfig(std::move(sc), ownNode);
 +    };
 +    cb.setLicensed = [this](bool on) {
 +        meshtastic_User u = myUser;
@@ -11619,10 +11721,18 @@ index 0000000..713e6bd
 +    ui.setGpsMode((int)cfg.gps_mode); // Settings shows the GPS switch from now on
 +}
 +
++void HopticsView::updateSecurityConfig(const meshtastic_Config_SecurityConfig &cfg)
++{
++    security = cfg;
++    haveSecurity = true;
++    ui.setSigPolicy((int)cfg.packet_signature_policy);
++}
++
 +void HopticsView::updateLoRaConfig(const meshtastic_Config_LoRaConfig &cfg)
 +{
 +    lora = cfg;
 +    haveLora = true;
++    ui.setTransmit(cfg.tx_enabled);
 +    ui.setLnaMode((int)cfg.fem_lna_mode);
 +    ui.setOkToMqtt(cfg.config_ok_to_mqtt);
 +    pushRadioInfo();
