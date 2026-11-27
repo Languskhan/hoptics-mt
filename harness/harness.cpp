@@ -638,6 +638,34 @@ int main(int argc, char **argv)
         lv_obj_send_event(ui.setHamSw, LV_EVENT_VALUE_CHANGED, nullptr);
         pump(20);
         rexpect(sentLic == 0 && !ui.licensed, "licensed: off at once");
+        { // Tap to wake: shown on touch screens, saved through the callback
+            int sentTap = -1;
+            ui.cbs.setTapWake = [&](bool on) { sentTap = on; };
+            ui.setTapWake(true, true);
+            ui.openSettings();
+            pump(20);
+            rexpect(!lv_obj_has_flag(ui.setTapWakeRow, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_state(ui.setTapWakeSw, LV_STATE_CHECKED),
+                    "tap to wake: shown and on");
+            lv_obj_remove_state(ui.setTapWakeSw, LV_STATE_CHECKED);
+            lv_obj_send_event(ui.setTapWakeSw, LV_EVENT_VALUE_CHANGED, nullptr);
+            pump(20);
+            rexpect(sentTap == 0 && !ui.tapWake, "tap to wake: off is saved");
+            lv_obj_add_state(ui.setTapWakeSw, LV_STATE_CHECKED);
+            lv_obj_send_event(ui.setTapWakeSw, LV_EVENT_VALUE_CHANGED, nullptr);
+            pump(20);
+            rexpect(sentTap == 1, "tap to wake: back on");
+            lv_obj_scroll_to_view_recursive(ui.setTapWakeSw, LV_ANIM_OFF);
+            pump(20);
+            shot("09i_settings_tap_wake");
+            ui.setTapWake(true, false);
+            ui.openSettings();
+            pump(20);
+            rexpect(lv_obj_has_flag(ui.setTapWakeRow, LV_OBJ_FLAG_HIDDEN), "tap to wake: hidden without a touch screen");
+            ui.setTapWake(true, true);
+            ui.cbs.setTapWake = nullptr;
+            ui.openSettings();
+            pump(20);
+        }
         { // Country picker: a legal region for the country, on the band these boards have
             auto pickIn = [&](lv_obj_t *dd, const char *name) {
                 for (uint32_t i = 0; i < lv_dropdown_get_option_count(dd); i++) {

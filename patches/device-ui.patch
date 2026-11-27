@@ -12,11 +12,58 @@ index 15806b2..597a359 100644
      virtual void updateFileinfo(const meshtastic_FileInfo &fileinfo) {}
      virtual void updateRingtone(const char rtttl[231]) {}
  
+diff --git a/include/graphics/driver/DisplayDriver.h b/include/graphics/driver/DisplayDriver.h
+index 479bd4b..b3cb4ba 100644
+--- a/include/graphics/driver/DisplayDriver.h
++++ b/include/graphics/driver/DisplayDriver.h
+@@ -17,6 +17,9 @@
+ typedef lv_display_t LVGLDisplay;
+ typedef lv_indev_t LVGLTouch;
+ 
++// Hoptics: a tap on the dark screen wakes it (Settings > Display). Read by the LGFX driver's sleep loop.
++inline std::atomic<bool> hopticsTapWake{true};
++
+ class DisplayDriver
+ {
+   public:
 diff --git a/include/graphics/driver/LGFXDriver.h b/include/graphics/driver/LGFXDriver.h
-index 98d4bc7..05dbb07 100644
+index 98d4bc7..216a76a 100644
 --- a/include/graphics/driver/LGFXDriver.h
 +++ b/include/graphics/driver/LGFXDriver.h
-@@ -466,6 +466,53 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
+@@ -163,6 +163,21 @@ template <class LGFX> void LGFXDriver<LGFX>::task_handler(void)
+                         pin_int = BUTTON_PIN;
+ #endif
+                     }
++#if defined(HOPTICS_UI) && defined(CUSTOM_TOUCH_DRIVER)
++                    bool tapWoke = false;
++                    if (!hopticsTapWake)
++                        pin_int = -1; // tap to wake turned off: buttons and keys only
++                    else if (pin_int < 0) { // no touch interrupt line (Heltec V4 kits): ask the controller, 20 times a second
++                        static uint32_t lastPoll = 0;
++                        uint16_t tx, ty;
++                        if (millis() - lastPoll >= 50) {
++                            lastPoll = millis();
++                            tapWoke = lgfx->getTouchXY(&tx, &ty);
++                            if (tapWoke)
++                                forcedWakeup = true;
++                        }
++                    }
++#endif
+                     if (forcedWakeup
+ #ifndef DISPLAY_POWER_BUTTON_ONLY
+                         || (pin_int >= 0 && DisplayDriver::view->sleep(pin_int)) ||
+@@ -200,6 +215,10 @@ template <class LGFX> void LGFXDriver<LGFX>::task_handler(void)
+                             lv_indev_enable(InputDriver::instance()->getButton(), false);
+                         }
+                         lv_display_trigger_activity(NULL);
++#if defined(HOPTICS_UI) && defined(CUSTOM_TOUCH_DRIVER)
++                        if (tapWoke && DisplayDriver::touch)
++                            lv_indev_wait_release(DisplayDriver::touch); // the waking tap presses nothing
++#endif
+                     } else {
+                         // we woke up due to e.g. serial traffic (or sleep() simply not implemented)
+                         // continue with processing loop and enter sleep() again next round
+@@ -466,6 +485,53 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
          touched = lgfx->getTouch(&touchX, &touchY);
      }
  #endif
@@ -70,7 +117,7 @@ index 98d4bc7..05dbb07 100644
      if (!touched) {
          data->state = LV_INDEV_STATE_REL;
      } else {
-@@ -475,6 +522,7 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
+@@ -475,6 +541,7 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
  
          ILOG_DEBUG("Touch(%hd/%hd)", touchX, touchY);
      }
@@ -817,10 +864,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..0051186
+index 0000000..ca1d6fe
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,707 @@
+@@ -0,0 +1,710 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -1006,6 +1053,7 @@ index 0000000..0051186
 +        std::function<void(uint8_t brightness)> setBrightness;
 +        std::function<void(uint16_t seconds)> setScreenTimeout;
 +        std::function<void(bool on)> setBanner;
++        std::function<void(bool on)> setTapWake; // tap the dark screen to wake it
 +        std::function<void(const char *shortName, const char *longName)> saveUser;
 +        std::function<void(int role)> setRole;
 +        std::function<void(int region, int preset, uint32_t slot)> setRegion; // a preset the region allows; slot 0 = default
@@ -1112,6 +1160,7 @@ index 0000000..0051186
 +    // read-only JSON snapshot for the web page / loggers (no DM content ever)
 +    void buildSnapshotJson(std::string &out) const;
 +    void setUiConfig(uint8_t brightness, uint16_t timeout, bool banner);
++    void setTapWake(bool on, bool available) { tapWake = on; tapWakeAvail = available; }
 +    void setDeviceInfo(const char *fwVersion, int hwModel, bool canShutdown, bool hasBluetooth);
 +    void setTime(uint32_t epoch);
 +    void setConnected(bool connected);
@@ -1483,7 +1532,8 @@ index 0000000..0051186
 +    lv_obj_t *setOv = nullptr, *setBright = nullptr, *setTimeout = nullptr, *setBanner = nullptr, *setShort = nullptr,
 +             *setLong = nullptr, *setRoleDd = nullptr, *setRegionDd = nullptr, *setPresetDd = nullptr, *setBt = nullptr,
 +             *setInfo = nullptr, *setShutdownBtn = nullptr, *setThemeDd = nullptr, *setBtPin = nullptr, *setWebChatSw = nullptr,
-+             *setMapSw = nullptr, *setMapInfo = nullptr, *setCountryDd = nullptr, *setMeshDd = nullptr;
++             *setMapSw = nullptr, *setMapInfo = nullptr, *setCountryDd = nullptr, *setMeshDd = nullptr, *setTapWakeRow = nullptr, *setTapWakeSw = nullptr;
++    bool tapWake = true, tapWakeAvail = false; // tap-to-wake: on, and the board has a touch screen
 +    uint32_t countryIdx = 0; // Settings country dropdown: 0 none, else COUNTRIES index + 1
 +    bool settingsLoading = false;
 +
@@ -3578,10 +3628,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..fc7ab35
+index 0000000..660cea9
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,8011 @@
+@@ -0,0 +1,8039 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -7552,6 +7602,26 @@ index 0000000..fc7ab35
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
 +
++    setTapWakeRow = plain(cd); // touch screens only (shown by loadSettingsValues)
++    lv_obj_set_size(setTapWakeRow, LV_PCT(100), 30);
++    row(setTapWakeRow, 6);
++    lv_obj_t *twl = label(setTapWakeRow, &F14, C_TEXT, "Tap screen to wake");
++    lv_obj_set_flex_grow(twl, 1);
++    setTapWakeSw = lv_switch_create(setTapWakeRow);
++    stop(setTapWakeSw);
++    lv_obj_set_style_bg_color(setTapWakeSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    lv_obj_add_event_cb(
++        setTapWakeSw,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            ui->tapWake = lv_obj_has_state(ui->setTapWakeSw, LV_STATE_CHECKED);
++            if (ui->cbs.setTapWake)
++                ui->cbs.setTapWake(ui->tapWake);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++
 +    // message sound: picking one plays it once on the buzzer
 +    r = settingsRow(cd, "Message sound (plays a sample)");
 +    setToneDd = lv_dropdown_create(r);
@@ -8450,6 +8520,14 @@ index 0000000..fc7ab35
 +        lv_obj_add_state(setBanner, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setBanner, LV_STATE_CHECKED);
++    if (tapWakeAvail)
++        lv_obj_remove_flag(setTapWakeRow, LV_OBJ_FLAG_HIDDEN);
++    else
++        lv_obj_add_flag(setTapWakeRow, LV_OBJ_FLAG_HIDDEN);
++    if (tapWake)
++        lv_obj_add_state(setTapWakeSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setTapWakeSw, LV_STATE_CHECKED);
 +    if (bluetoothOn)
 +        lv_obj_add_state(setBt, LV_STATE_CHECKED);
 +    else
@@ -11595,10 +11673,10 @@ index 0000000..fc7ab35
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..d68a58e
+index 0000000..465f69e
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,1173 @@
+@@ -0,0 +1,1182 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -11769,6 +11847,9 @@ index 0000000..d68a58e
 +    ui.setUiConfig(uiCfg.screen_brightness, uiCfg.screen_timeout, uiCfg.banner_enabled);
 +    // node_highlight.chat_switch is otherwise unused by Hoptics: we keep the "share chat on web" opt-in there
 +    ui.setWebChat(uiCfg.has_node_highlight && uiCfg.node_highlight.chat_switch);
++    // node_highlight.position_switch is otherwise unused too: it keeps "tap to wake" turned OFF (so new = on)
++    hopticsTapWake = !(uiCfg.has_node_highlight && uiCfg.node_highlight.position_switch);
++    ui.setTapWake(hopticsTapWake, displaydriver->hasTouch());
 +    ui.setTheme((int)uiCfg.theme < HopticsUI::TH_COUNT ? (int)uiCfg.theme : 0);
 +    ui.setBootStatus("Loading node database...");
 +    state = eSetupUIConfig;
@@ -12106,6 +12187,12 @@ index 0000000..d68a58e
 +    };
 +    cb.setTheme = [this](int t) {
 +        uiCfg.theme = (meshtastic_Theme)t;
++        storeUI();
++    };
++    cb.setTapWake = [this](bool on) {
++        hopticsTapWake = on;
++        uiCfg.has_node_highlight = true;
++        uiCfg.node_highlight.position_switch = !on;
 +        storeUI();
 +    };
 +    cb.setWebChat = [this](bool on) {
