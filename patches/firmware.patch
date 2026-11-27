@@ -312,6 +312,22 @@ index 9d26f32..daeac4b 100644
  #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
      // No per-instance auth members - see method-level note. All state lives
      // in a file-scope slot table in PhoneAPI.cpp keyed by `this` pointer.
+diff --git a/src/mesh/RadioInterface.cpp b/src/mesh/RadioInterface.cpp
+index 7a84b89..5eb57f3 100644
+--- a/src/mesh/RadioInterface.cpp
++++ b/src/mesh/RadioInterface.cpp
+@@ -1606,3 +1606,11 @@ size_t RadioInterface::encodeRadioBuffer(meshtastic_MeshPacket *p)
+ 
+     return payloadLen + sizeof(PacketHeader);
+ }
++
++#ifdef HOPTICS_UI
++// Hoptics screen: the frequency the radio is tuned to (0 = no LoRa radio). Read by the UI task; a float store is atomic.
++extern "C" float hoptics_radio_freq(void)
++{
++    return RadioLibInterface::instance ? RadioLibInterface::instance->getFreq() : 0;
++}
++#endif
 diff --git a/src/mesh/api/PacketAPI.cpp b/src/mesh/api/PacketAPI.cpp
 index 3590cfd..319d1e6 100644
 --- a/src/mesh/api/PacketAPI.cpp

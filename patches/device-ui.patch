@@ -737,10 +737,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..2532968
+index 0000000..b988f89
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,659 @@
+@@ -0,0 +1,665 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -911,7 +911,8 @@ index 0000000..2532968
 +        std::function<void(bool on)> setBanner;
 +        std::function<void(const char *shortName, const char *longName)> saveUser;
 +        std::function<void(int role)> setRole;
-+        std::function<void(int region)> setRegion;
++        std::function<void(int region, int preset)> setRegion; // the preset: one the new region allows
++        std::function<void(bool on)> setLicensed;               // User.is_licensed (ham operator mode)
 +        std::function<void(int preset)> setPreset;
 +        std::function<void(bool on)> setBluetooth;
 +        // Wi-Fi from the screen; psk == nullptr keeps the saved password. The radio restarts to apply it.
@@ -988,7 +989,9 @@ index 0000000..2532968
 +    void openReach(uint32_t requestId);
 +    void closeReach(void);
 +    void setLnaMode(int mode); // FEM_LNA_Mode: 0 off, 1 on, 2 not present, 3 auto
-+    void setGpsMode(int mode); // PositionConfig.GpsMode: 0 disabled, 1 enabled, 2 not present
++    void setGpsMode(int mode);
++    void setLicensed(bool on); // our node's User.is_licensed
++    void refreshRadioSettings(void); // region / preset dropdowns from region, preset // PositionConfig.GpsMode: 0 disabled, 1 enabled, 2 not present
 +    // message sounds offered in Settings (picked from device-ui's Meshtastic tone library)
 +    static constexpr int kToneCount = 8;
 +    static const char *toneName(int i);        // shown on screen
@@ -1262,6 +1265,9 @@ index 0000000..2532968
 +    uint32_t chatReachId = 0;
 +    int lnaMode = 2; // not present until the radio says otherwise
 +    lv_obj_t *setGpsRow = nullptr, *setGpsSw = nullptr;
++    lv_obj_t *setHamSw = nullptr;
++    bool licensed = false;     // our User.is_licensed
++    uint32_t hamArmedUntil = 0; // licensed mode asks twice: the first flip arms it for 5 s
 +    int gpsMode = -1; // not reported yet: no GPS switch
 +    // Location card (M9 location key, or the Home location card)
 +    lv_obj_t *locOv = nullptr, *locState = nullptr, *locInfo = nullptr, *locMapBtn = nullptr, *locSendBtn = nullptr,
@@ -1402,10 +1408,10 @@ index 0000000..2532968
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..5cd2cb5
+index 0000000..c6818b1
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,107 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1475,6 +1481,7 @@ index 0000000..5cd2cb5
 +  private:
 +    void wireCallbacks(void);
 +    void armRebootFallback(void);
++    void repushRadioSoon(void);
 +    void storeUI(void);
 +    uint32_t convKeyFor(uint32_t from, uint32_t to, uint8_t ch) const;
 +    uint8_t nodeChannel(uint32_t num) const;
@@ -3437,10 +3444,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..0198333
+index 0000000..9829c06
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7437 @@
+@@ -0,0 +1,7535 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -3855,6 +3862,41 @@ index 0000000..0198333
 +    default:
 +        return pick({0, 1, 3, 4, 5, 6, 7, 8, 9, 16});
 +    }
++}
++// the presets the firmware accepts for exactly this region (validateConfigLora): the EU trio each own a part of the
++// list shown, so a region change keeps the preset only if it is in here
++static std::vector<int> presetsExact(int region)
++{
++    switch (region) {
++    case 3:
++        return {0, 1, 3, 4, 5, 6, 7};
++    case 29:
++        return {10, 11};
++    case 32:
++    case 34: case 35: case 36: case 37:
++        return {12, 13};
++    case 0:
++        return {0};
++    default:
++        return {0, 1, 3, 4, 5, 6, 7, 8, 9, 16};
++    }
++}
++// the region's default preset (RadioInterface.cpp RDEF)
++static int defaultPresetFor(int region)
++{
++    switch (region) {
++    case 29:
++        return 10; // Lite Fast
++    case 32:
++    case 34: case 35: case 36: case 37:
++        return 13; // Narrow Slow
++    default:
++        return 0; // Long Fast
++    }
++}
++static bool isHamRegion(int region)
++{
++    return region >= 34 && region <= 37;
 +}
 +std::string optString(const std::vector<Opt> &opts)
 +{
@@ -7505,7 +7547,7 @@ index 0000000..0198333
 +        LV_EVENT_CLICKED, this);
 +
 +    // radio
-+    lv_obj_t *cr = card(body, "RADIO  -  changes reboot the node");
++    lv_obj_t *cr = card(body, "RADIO");
 +    r = settingsRow(cr, "Region");
 +    setRegionDd = lv_dropdown_create(r);
 +    ctlWidth(setRegionDd);
@@ -7515,10 +7557,7 @@ index 0000000..0198333
 +    r = settingsRow(cr, "Modem preset");
 +    setPresetDd = lv_dropdown_create(r);
 +    ctlWidth(setPresetDd);
-+    presetVals.clear();
-+    for (const Opt &o : presetsFor(region))
-+        presetVals.push_back(o.value);
-+    lv_dropdown_set_options(setPresetDd, optString(presetsFor(region)).c_str());
++    presetVals.clear(); // refreshRadioSettings fills it in
 +    styleDropdown(setPresetDd);
 +    stop(setPresetDd);
 +    r = settingsRow(cr, "Device role");
@@ -7558,10 +7597,17 @@ index 0000000..0198333
 +            if (ui->settingsLoading)
 +                return;
 +            int v = REGIONS[lv_dropdown_get_selected(ui->setRegionDd)].value;
-+            if (v != ui->region && ui->cbs.setRegion) {
-+                ui->cbs.setRegion(v);
-+                ui->showToast(LV_SYMBOL_REFRESH " Region set - rebooting");
++            if (v == ui->region || !ui->cbs.setRegion)
++                return;
++            if (isHamRegion(v) && !ui->licensed) { // the firmware refuses a ham band outside licensed mode
++                lv_dropdown_set_selected(ui->setRegionDd, optIndex(REGIONS, ui->region));
++                ui->showToast(LV_SYMBOL_WARNING " Ham bands: turn on Licensed ham mode first", 6000);
++                return;
 +            }
++            const std::vector<int> ok = presetsExact(v);
++            const int p = std::find(ok.begin(), ok.end(), ui->preset) != ok.end() ? ui->preset : defaultPresetFor(v);
++            ui->cbs.setRegion(v, p);
++            ui->showToast(LV_SYMBOL_OK " Region set");
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
 +    lv_obj_add_event_cb(
@@ -7576,7 +7622,7 @@ index 0000000..0198333
 +            int v = ui->presetVals[sel];
 +            if (v != ui->preset && ui->cbs.setPreset) {
 +                ui->cbs.setPreset(v);
-+                ui->showToast(LV_SYMBOL_REFRESH " Preset set - rebooting");
++                ui->showToast(LV_SYMBOL_OK " Preset set");
 +            }
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
@@ -7617,6 +7663,37 @@ index 0000000..0198333
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
 +    lv_obj_add_flag(setGpsRow, LV_OBJ_FLAG_HIDDEN);
++
++    // licensed ham operator: unlocks the ham bands; the firmware then sends without encryption, as ham rules require
++    lv_obj_t *hr = plain(cr);
++    lv_obj_set_size(hr, LV_PCT(100), 30);
++    row(hr, 6);
++    lv_obj_t *hl = label(hr, &F14, C_TEXT, "Licensed ham mode");
++    lv_obj_set_flex_grow(hl, 1);
++    oneLine(hl);
++    setHamSw = lv_switch_create(hr);
++    stop(setHamSw);
++    lv_obj_set_style_bg_color(setHamSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    lv_obj_add_event_cb(
++        setHamSw,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            const bool on = lv_obj_has_state(ui->setHamSw, LV_STATE_CHECKED);
++            if (on && (int32_t)(lv_tick_get() - ui->hamArmedUntil) > 0) { // first flip: say what it does, ask again
++                lv_obj_remove_state(ui->setHamSw, LV_STATE_CHECKED);
++                ui->hamArmedUntil = lv_tick_get() + 5000;
++                ui->showToast(LV_SYMBOL_WARNING " Ham mode: no encryption. Flip again", 5000);
++                return;
++            }
++            ui->hamArmedUntil = 0;
++            if (ui->cbs.setLicensed)
++                ui->cbs.setLicensed(on);
++            ui->licensed = on;
++            ui->showToast(on ? LV_SYMBOL_OK " Licensed ham mode on" : LV_SYMBOL_OK " Licensed ham mode off");
++        },
++        LV_EVENT_VALUE_CHANGED, this);
 +
 +    // wi-fi
 +    lv_obj_t *cwf = card(body, "WI-FI");
@@ -8125,16 +8202,11 @@ index 0000000..0198333
 +        lv_obj_remove_flag(setLnaRow, LV_OBJ_FLAG_HIDDEN);
 +        lv_dropdown_set_selected(setLnaDd, lnaMode == 3 ? 0 : (lnaMode == 1 ? 1 : 2));
 +    }
-+    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
-+    const std::vector<Opt> po = presetsFor(region);
-+    std::vector<int> vals;
-+    for (const Opt &o : po)
-+        vals.push_back(o.value);
-+    if (vals != presetVals) { // the region changed: its own presets
-+        presetVals = vals;
-+        lv_dropdown_set_options(setPresetDd, optString(po).c_str());
-+    }
-+    lv_dropdown_set_selected(setPresetDd, optIndex(po, preset));
++    refreshRadioSettings();
++    if (licensed)
++        lv_obj_add_state(setHamSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setHamSw, LV_STATE_CHECKED);
 +    lv_dropdown_set_selected(setRoleDd, optIndex(ROLES, role));
 +    const Node *me = findNode(myNode);
 +    lv_textarea_set_text(setShort, me ? me->shortName : "");
@@ -8553,6 +8625,7 @@ index 0000000..0198333
 +    snprintf(regionName, sizeof(regionName), "%s", regName ? regName : "--");
 +    snprintf(presetName, sizeof(presetName), "%s", usePre ? (preName ? preName : "--") : "Custom");
 +    regionKnown = true;
++    refreshRadioSettings();
 +    envDirty = 0xff; // units follow the region until picked in Settings
 +    if (mainScreen && lv_screen_active() == mainScreen)
 +        maybeShowWizard();
@@ -8623,6 +8696,35 @@ index 0000000..0198333
 +void HopticsUI::setGpsMode(int mode)
 +{
 +    gpsMode = mode;
++}
++
++void HopticsUI::setLicensed(bool on)
++{
++    licensed = on;
++}
++
++// the region and preset dropdowns. No region yet: the radio may only use Long Fast, so the preset waits for one.
++void HopticsUI::refreshRadioSettings(void)
++{
++    if (!setRegionDd)
++        return;
++    const bool was = settingsLoading;
++    settingsLoading = true; // setting the dropdowns must not send anything
++    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
++    std::vector<Opt> po = presetsFor(region);
++    std::vector<int> vals;
++    for (const Opt &o : po)
++        vals.push_back(o.value);
++    if (vals != presetVals) { // the region changed: its own presets
++        presetVals = vals;
++        lv_dropdown_set_options(setPresetDd, region == 0 ? "Pick a region first" : optString(po).c_str());
++    }
++    lv_dropdown_set_selected(setPresetDd, optIndex(po, preset));
++    if (region == 0)
++        lv_obj_add_state(setPresetDd, LV_STATE_DISABLED);
++    else
++        lv_obj_remove_state(setPresetDd, LV_STATE_DISABLED);
++    settingsLoading = was;
 +}
 +
 +void HopticsUI::setBluetoothEnabled(bool on, uint32_t fixedPin)
@@ -9994,9 +10096,12 @@ index 0000000..0198333
 +        keyScope();
 +        if (cbs.setTheme)
 +            cbs.setTheme(wizTheme);
-+        if (reg != 0 && cbs.setRegion) {
-+            cbs.setRegion(reg);
-+            showToast(LV_SYMBOL_REFRESH " Saved. The radio restarts with your region...", 8000);
++        if (reg != 0 && cbs.setRegion && !isHamRegion(reg)) {
++            const std::vector<int> ok = presetsExact(reg);
++            cbs.setRegion(reg, std::find(ok.begin(), ok.end(), preset) != ok.end() ? preset : defaultPresetFor(reg));
++            showToast(LV_SYMBOL_OK " Saved. Your region is set.", 6000);
++        } else if (isHamRegion(reg)) {
++            showToast(LV_SYMBOL_WARNING " Saved. Ham bands: Settings > Radio > Licensed ham mode", 8000);
 +        }
 +        if (wizTheme != themeIdx) {
 +            pendingTheme = wizTheme;
@@ -10880,10 +10985,10 @@ index 0000000..0198333
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..7df4922
+index 0000000..713e6bd
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,837 @@
+@@ -0,0 +1,872 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -11161,14 +11266,21 @@ index 0000000..7df4922
 +        d.role = (meshtastic_Config_DeviceConfig_Role)r;
 +        controller->sendConfig(std::move(d), ownNode);
 +    };
-+    cb.setRegion = [this](int r) {
++    // LoRa changes apply live in Meshtastic 2.8 (no restart, and the radio sends no new config back), so the
++    // screen keeps its own copy current, as the stock MUI does
++    cb.setRegion = [this](int r, int p) {
 +        if (!haveLora)
 +            return;
 +        meshtastic_Config_LoRaConfig l = lora;
 +        l.region = (meshtastic_Config_LoRaConfig_RegionCode)r;
 +        l.use_preset = true;
++        l.modem_preset = (meshtastic_Config_LoRaConfig_ModemPreset)p; // one the region allows, or the change is refused
++        l.channel_num = 0;
 +        l.tx_enabled = true;
++        lora = l;
 +        controller->sendConfig(std::move(l), ownNode);
++        pushRadioInfo();
++        repushRadioSoon();
 +    };
 +    cb.setPreset = [this](int p) {
 +        if (!haveLora)
@@ -11177,7 +11289,16 @@ index 0000000..7df4922
 +        l.use_preset = true;
 +        l.modem_preset = (meshtastic_Config_LoRaConfig_ModemPreset)p;
 +        l.channel_num = 0; // back to the preset's default slot
++        lora = l;
 +        controller->sendConfig(std::move(l), ownNode);
++        pushRadioInfo();
++        repushRadioSoon();
++    };
++    cb.setLicensed = [this](bool on) {
++        meshtastic_User u = myUser;
++        u.is_licensed = on;
++        myUser = u;
++        controller->sendConfig(u, ownNode);
 +    };
 +    cb.setBluetooth = [this](bool on) {
 +        if (on && haveNetwork && network.wifi_enabled) {
@@ -11392,8 +11513,10 @@ index 0000000..7df4922
 +    nodes[nodeNum] = nullptr; // lets the base class know this node exists
 +    nodeChannels[nodeNum] = channel;
 +    nodeHasKey[nodeNum] = cfg.public_key.size == 32;
-+    if (nodeNum == ownNode)
++    if (nodeNum == ownNode) {
 +        myUser = cfg;
++        ui.setLicensed(cfg.is_licensed);
++    }
 +    ui.upsertNode(nodeNum, channel, lastHeard, cfg.short_name, cfg.long_name, (uint8_t)cfg.role, cfg.public_key.size == 32,
 +                  false, (uint16_t)cfg.hw_model);
 +    nodeCount = nodes.size();
@@ -11505,12 +11628,21 @@ index 0000000..7df4922
 +    pushRadioInfo();
 +}
 +
++// the frequency the radio is tuned to (firmware: RadioInterface::getFreq). Meshtastic 2.8 regions space and pad
++// their slots (Lite, Narrow, the ham bands), which LoRaPresets' formula doesn't know. 0 here: not known (no radio).
++extern "C" __attribute__((weak)) float hoptics_radio_freq(void)
++{
++    return 0;
++}
++
 +void HopticsView::pushRadioInfo(void)
 +{
 +    if (!haveLora)
 +        return;
-+    float freq = 0;
-+    if (lora.override_frequency > 0)
++    float freq = lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET ? hoptics_radio_freq() : 0;
++    if (freq > 0)
++        ; // what the radio is really on
++    else if (lora.override_frequency > 0)
 +        freq = lora.override_frequency;
 +    else if (lora.use_preset && lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
 +        // same slot logic as the stock MUI: explicit channel_num, else the preset/channel-name default
@@ -11537,6 +11669,14 @@ index 0000000..7df4922
 +        state = eProgrammingMode;
 +        ui.showPhoneMode(pin, false);
 +    }
++}
++
++// a LoRa change is applied by the firmware a moment after we send it: show the new frequency once it has retuned
++void HopticsView::repushRadioSoon(void)
++{
++    lv_timer_t *t = lv_timer_create([](lv_timer_t *t) { ((HopticsView *)lv_timer_get_user_data(t))->pushRadioInfo(); }, 2000,
++                                    this);
++    lv_timer_set_repeat_count(t, 1);
 +}
 +
 +void HopticsView::armRebootFallback(void)

@@ -557,6 +557,93 @@ int main(int argc, char **argv)
         pump(20);
         shot("43b_settings_gps");
     }
+    { // Radio settings (Meshtastic 2.8 region rules): presets per region, a region change keeps a legal preset,
+      // ham bands only in licensed mode, licensed mode asks twice
+        int sentRegion = -1, sentPreset = -1, sentLic = -1, presetSet = -1;
+        ui.cbs.setRegion = [&](int r, int p) { sentRegion = r; sentPreset = p; };
+        ui.cbs.setPreset = [&](int p) { presetSet = p; };
+        ui.cbs.setLicensed = [&](bool on) { sentLic = on; };
+        int rfails = 0;
+        auto rexpect = [&](bool ok, const char *what) {
+            printf("%s radio: %s\n", ok ? "ok  " : "FAIL", what);
+            rfails += !ok;
+        };
+        auto toastHas = [&](const char *t) { return !lv_obj_has_flag(ui.toast, LV_OBJ_FLAG_HIDDEN) && strstr(lv_label_get_text(ui.toastLabel), t); };
+        auto pickRegion = [&](int code) {
+            for (uint32_t i = 0; i < lv_dropdown_get_option_count(ui.setRegionDd); i++) {
+                lv_dropdown_set_selected(ui.setRegionDd, i);
+                char b[64];
+                lv_dropdown_get_selected_str(ui.setRegionDd, b, sizeof(b));
+                const char *want = code == 29 ? "EU_866" : code == 3 ? "EU_868" : code == 35 ? "ITU2_70CM" : code == 1 ? "US -" : "Unset";
+                if (strstr(b, want) == b || (code == 0 && !strcmp(b, "Unset")))
+                    break;
+            }
+            lv_obj_send_event(ui.setRegionDd, LV_EVENT_VALUE_CHANGED, nullptr);
+            pump(20);
+        };
+        auto opts = [&]() { return std::string(lv_dropdown_get_options(ui.setPresetDd)); };
+        ui.setLicensed(false);
+        ui.setRadio(0, "UNSET", 0, "LongFast", true, 3, 0, 0);
+        ui.openSettings();
+        pump(20);
+        rexpect(opts() == "Pick a region first" && lv_obj_has_state(ui.setPresetDd, LV_STATE_DISABLED), "no region: preset waits for one");
+        lv_obj_scroll_to_view_recursive(ui.setPresetDd, LV_ANIM_OFF);
+        pump(20);
+        shot("09c_settings_radio_unset");
+        ui.setRadio(1, "US", 16, "MediumTurbo", true, 3, 27, 920.25f);
+        pump(20);
+        rexpect(!lv_obj_has_state(ui.setPresetDd, LV_STATE_DISABLED) && opts().find("Medium Turbo") != std::string::npos &&
+                    opts().find("Lite") == std::string::npos && opts().find("Tiny") == std::string::npos,
+                "US: the 10 presets the firmware allows");
+        size_t n = 1;
+        for (char c : opts())
+            n += c == '\n';
+        rexpect(n == 10, "US: exactly 10 presets");
+        pickRegion(29); // EU_866 does not allow Medium Turbo: the region change carries its default, Lite Fast
+        rexpect(sentRegion == 29 && sentPreset == 10 && toastHas("Region set"), "region change picks a legal preset");
+        ui.setRadio(1, "US", 4, "MediumFast", true, 3, 27, 913.125f);
+        sentRegion = sentPreset = -1;
+        pickRegion(3); // EU_868 allows Medium Fast: kept
+        rexpect(sentRegion == 3 && sentPreset == 4, "region change keeps an allowed preset");
+        ui.setRadio(1, "US", 4, "MediumFast", true, 3, 27, 913.125f);
+        sentRegion = -1;
+        pickRegion(35); // a ham band, not licensed: refused, dropdown back on US
+        char b[64];
+        lv_dropdown_get_selected_str(ui.setRegionDd, b, sizeof(b));
+        rexpect(sentRegion == -1 && toastHas("Licensed ham mode") && strstr(b, "US") == b, "ham band needs licensed mode");
+        rexpect(!lv_obj_has_state(ui.setPresetDd, LV_STATE_DISABLED), "preset dropdown enabled once a region is set");
+        pump(300);
+        shot("09d_settings_radio_ham_refused");
+        lv_obj_add_flag(ui.toast, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_state(ui.setHamSw, LV_STATE_CHECKED); // first flip: asks
+        lv_obj_send_event(ui.setHamSw, LV_EVENT_VALUE_CHANGED, nullptr);
+        pump(20);
+        rexpect(sentLic == -1 && !lv_obj_has_state(ui.setHamSw, LV_STATE_CHECKED) && toastHas("Flip again"), "licensed: first flip asks");
+        lv_obj_scroll_to_view_recursive(ui.setHamSw, LV_ANIM_OFF);
+        pump(20);
+        shot("09e_settings_licensed_ask");
+        lv_obj_add_state(ui.setHamSw, LV_STATE_CHECKED); // second flip within 5 s: on
+        lv_obj_send_event(ui.setHamSw, LV_EVENT_VALUE_CHANGED, nullptr);
+        pump(20);
+        rexpect(sentLic == 1 && ui.licensed, "licensed: second flip turns it on");
+        pickRegion(35);
+        rexpect(sentRegion == 35 && sentPreset == 13, "licensed: ham band allowed, Narrow Slow");
+        ui.setRadio(35, "ITU2_70CM", 13, "NarrowSlow", true, 3, 27, 420.03f);
+        pump(20);
+        rexpect(opts() == "Narrow Fast\nNarrow Slow", "ham 70 cm: the narrow presets");
+        lv_obj_remove_state(ui.setHamSw, LV_STATE_CHECKED); // off: no question
+        lv_obj_send_event(ui.setHamSw, LV_EVENT_VALUE_CHANGED, nullptr);
+        pump(20);
+        rexpect(sentLic == 0 && !ui.licensed, "licensed: off at once");
+        ui.cbs.setRegion = nullptr;
+        ui.cbs.setPreset = nullptr;
+        ui.cbs.setLicensed = nullptr;
+        lv_obj_add_flag(ui.toast, LV_OBJ_FLAG_HIDDEN);
+        ui.setRadio(1, "US", 0, "LongFast", true, 3, 27, 906.875f);
+        printf("radio settings: %d failed checks\n", rfails);
+        if (rfails)
+            return 1;
+    }
     lv_obj_scroll_to_view_recursive(ui.setPsk, LV_ANIM_OFF); lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setPsk))), 0, -90, LV_ANIM_OFF);
     pump(20);
     shot("44_settings_wifi");
