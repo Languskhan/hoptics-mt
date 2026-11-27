@@ -817,10 +817,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..2f9497f
+index 0000000..0051186
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,707 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -1008,7 +1008,7 @@ index 0000000..2f9497f
 +        std::function<void(bool on)> setBanner;
 +        std::function<void(const char *shortName, const char *longName)> saveUser;
 +        std::function<void(int role)> setRole;
-+        std::function<void(int region, int preset)> setRegion; // the preset: one the new region allows
++        std::function<void(int region, int preset, uint32_t slot)> setRegion; // a preset the region allows; slot 0 = default
 +        std::function<void(bool on)> setLicensed;               // User.is_licensed (ham operator mode)
 +        std::function<void(bool on)> setTransmit;               // LoRaConfig.tx_enabled (off: receive only)
 +        std::function<void(int policy)> setSigPolicy;           // SecurityConfig.packet_signature_policy 0..2
@@ -1095,6 +1095,7 @@ index 0000000..2f9497f
 +    void setLicensed(bool on); // our node's User.is_licensed
 +    void setTransmit(bool on); // LoRaConfig.tx_enabled
 +    void setSigPolicy(int p);  // SecurityConfig.packet_signature_policy
++    bool applyRegion(int region, int wantPreset, uint32_t slot); // false: refused (no callback, ham band unlicensed)
 +    void refreshRadioSettings(void); // region / preset dropdowns from region, preset // PositionConfig.GpsMode: 0 disabled, 1 enabled, 2 not present
 +    // message sounds offered in Settings (picked from device-ui's Meshtastic tone library)
 +    static constexpr int kToneCount = 8;
@@ -1482,7 +1483,8 @@ index 0000000..2f9497f
 +    lv_obj_t *setOv = nullptr, *setBright = nullptr, *setTimeout = nullptr, *setBanner = nullptr, *setShort = nullptr,
 +             *setLong = nullptr, *setRoleDd = nullptr, *setRegionDd = nullptr, *setPresetDd = nullptr, *setBt = nullptr,
 +             *setInfo = nullptr, *setShutdownBtn = nullptr, *setThemeDd = nullptr, *setBtPin = nullptr, *setWebChatSw = nullptr,
-+             *setMapSw = nullptr, *setMapInfo = nullptr;
++             *setMapSw = nullptr, *setMapInfo = nullptr, *setCountryDd = nullptr, *setMeshDd = nullptr;
++    uint32_t countryIdx = 0; // Settings country dropdown: 0 none, else COUNTRIES index + 1
 +    bool settingsLoading = false;
 +
 +    // environment card on Home, its detail page, the node page card and the Settings card
@@ -3576,10 +3578,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..f8de7c1
+index 0000000..fc7ab35
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7870 @@
+@@ -0,0 +1,8011 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -4030,6 +4032,58 @@ index 0000000..f8de7c1
 +{
 +    return region >= 34 && region <= 37;
 +}
++// bands these 868/915 MHz boards cannot use well: 433 MHz and China's 470 MHz
++static bool lowBand(int region)
++{
++    return region == 2 || region == 4 || region == 14 || region == 16 || region == 19 || region == 22 || region == 23;
++}
++// the region's code ("EU_868") from its REGIONS name
++static std::string regionCode(int region)
++{
++    for (const Opt &o : REGIONS)
++        if (o.value == region) {
++            const char *d = strstr(o.name, " - ");
++            return d ? std::string(o.name, d - o.name) : std::string(o.name);
++        }
++    return "?";
++}
++// the regions each country may use, from meshtastic.org/docs/configuration/region-by-country (Nov 2026).
++// Ham bands go by ITU region and licence, not by country, so they are not here.
++struct Country {
++    const char *name;
++    uint8_t r[2];
++};
++const Country COUNTRIES[] = {
++    {"Albania", {3, 2}},        {"Argentina", {6, 0}},    {"Australia", {6, 22}},     {"Austria", {3, 2}},
++    {"Belgium", {3, 2}},        {"Bosnia-Herzegovina", {3, 2}}, {"Brazil", {6, 26}},  {"Bulgaria", {3, 2}},
++    {"Canada", {1, 0}},         {"Chile", {6, 0}},        {"China", {4, 0}},          {"Colombia", {6, 0}},
++    {"Croatia", {3, 2}},        {"Cyprus", {3, 2}},       {"Czech Republic", {3, 2}}, {"Denmark", {3, 2}},
++    {"Ecuador", {6, 0}},        {"Estonia", {3, 2}},      {"Finland", {3, 2}},        {"France", {3, 2}},
++    {"Germany", {3, 2}},        {"Greece", {3, 2}},       {"Hungary", {3, 2}},        {"India", {10, 0}},
++    {"Indonesia", {18, 0}},     {"Ireland", {3, 2}},      {"Italy", {3, 2}},          {"Japan", {5, 0}},
++    {"Kazakhstan", {24, 23}},   {"Korea", {7, 0}},        {"Latvia", {3, 2}},         {"Lithuania", {3, 2}},
++    {"Luxembourg", {3, 2}},     {"Malaysia", {17, 16}},   {"Malta", {3, 2}},          {"Montenegro", {3, 2}},
++    {"Nepal", {25, 0}},         {"Netherlands", {3, 2}},  {"New Zealand", {6, 11}},   {"North Macedonia", {3, 2}},
++    {"Norway", {3, 2}},         {"Philippines", {21, 20}}, {"Poland", {3, 2}},        {"Portugal", {3, 2}},
++    {"Romania", {3, 2}},        {"Russia", {9, 0}},       {"Serbia", {3, 2}},         {"Singapore", {18, 0}},
++    {"Slovakia", {3, 2}},       {"Slovenia", {3, 2}},     {"South Africa", {3, 2}},   {"Spain", {3, 2}},
++    {"Sweden", {3, 2}},         {"Switzerland", {3, 2}},  {"Taiwan", {8, 0}},         {"Thailand", {12, 0}},
++    {"Turkiye", {3, 2}},        {"Ukraine", {3, 14}},     {"United Kingdom", {3, 2}}, {"United States", {1, 0}},
++    {"Vatican City", {3, 2}}};
++// community meshes that publish their settings (region, preset, frequency slot; 0 = the preset's default slot).
++// Sources: bayme.sh recommended settings; meshenvy.org; mspmesh.org; Sagebrush Mesh MediumFast guide (slot 45);
++// Florida Mesh regional settings (Jan 2026); BerlinMesh wiki / potatomesh.net; Wellington mesh (slot 16).
++struct LocalMesh {
++    const char *name;
++    uint8_t region, preset, slot;
++};
++const LocalMesh LOCAL_MESHES[] = {{"USA - SF Bay (BayMesh)", 1, 4, 0},
++                                  {"USA - Reno/Carson (MeshEnvy)", 1, 4, 0},
++                                  {"USA - Twin Cities (MSP Mesh)", 1, 4, 0},
++                                  {"USA - Tri-Cities WA", 1, 4, 45},
++                                  {"USA - SE Florida coast", 1, 4, 0},
++                                  {"Germany - Berlin (BerlinMesh)", 3, 4, 0},
++                                  {"NZ - Wellington", 6, 6, 16}};
 +std::string optString(const std::vector<Opt> &opts)
 +{
 +    std::string s;
@@ -4056,6 +4110,13 @@ index 0000000..f8de7c1
 +        s += opts[i].name;
 +    }
 +    return s;
++}
++template <size_t N> const char *optName(const Opt (&opts)[N], int value)
++{
++    for (const Opt &o : opts)
++        if (o.value == value)
++            return o.name;
++    return "?";
 +}
 +template <size_t N> int optIndex(const Opt (&opts)[N], int value)
 +{
@@ -7680,6 +7741,17 @@ index 0000000..f8de7c1
 +
 +    // radio
 +    lv_obj_t *cr = card(body, "RADIO");
++    r = settingsRow(cr, "Country (sets a legal region)");
++    setCountryDd = lv_dropdown_create(r);
++    ctlWidth(setCountryDd);
++    {
++        std::string co = "Choose country";
++        for (const Country &c : COUNTRIES)
++            (co += "\n") += c.name;
++        lv_dropdown_set_options(setCountryDd, co.c_str());
++    }
++    styleDropdown(setCountryDd);
++    stop(setCountryDd);
 +    r = settingsRow(cr, "Region");
 +    setRegionDd = lv_dropdown_create(r);
 +    ctlWidth(setRegionDd);
@@ -7692,6 +7764,62 @@ index 0000000..f8de7c1
 +    presetVals.clear(); // refreshRadioSettings fills it in
 +    styleDropdown(setPresetDd);
 +    stop(setPresetDd);
++    r = settingsRow(cr, "Local mesh (community settings)");
++    setMeshDd = lv_dropdown_create(r);
++    ctlWidth(setMeshDd);
++    {
++        std::string mo = "Choose a mesh";
++        for (const LocalMesh &m : LOCAL_MESHES)
++            (mo += "\n") += m.name;
++        lv_dropdown_set_options(setMeshDd, mo.c_str());
++    }
++    styleDropdown(setMeshDd);
++    stop(setMeshDd);
++    lv_obj_add_event_cb(
++        setCountryDd,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            const uint32_t sel = lv_dropdown_get_selected(ui->setCountryDd);
++            if (sel == 0 || sel > sizeof(COUNTRIES) / sizeof(COUNTRIES[0]))
++                return;
++            const Country &c = COUNTRIES[sel - 1];
++            ui->countryIdx = sel;
++            int pick = c.r[0]; // the band these boards have, when the country has one
++            if (lowBand(pick) && c.r[1] && !lowBand(c.r[1]))
++                pick = c.r[1];
++            const int other = c.r[0] == pick ? c.r[1] : c.r[0];
++            if (pick != ui->region && !ui->applyRegion(pick, -1, 0))
++                return;
++            char t[128];
++            int n = snprintf(t, sizeof(t), LV_SYMBOL_OK " %s: %s", c.name, regionCode(pick).c_str());
++            if (lowBand(pick))
++                snprintf(t + n, sizeof(t) - n, " - needs a %s MHz radio", pick == 4 ? "470" : "433");
++            else if (other)
++                snprintf(t + n, sizeof(t) - n, lowBand(other) ? " (%s on 433 radios)" : " (or %s)", regionCode(other).c_str());
++            ui->showToast(t, 6000);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++    lv_obj_add_event_cb(
++        setMeshDd,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            const uint32_t sel = lv_dropdown_get_selected(ui->setMeshDd);
++            if (sel == 0 || sel > sizeof(LOCAL_MESHES) / sizeof(LOCAL_MESHES[0]))
++                return;
++            const LocalMesh &m = LOCAL_MESHES[sel - 1];
++            if (!ui->applyRegion(m.region, m.preset, m.slot))
++                return;
++            char t[128];
++            int n = snprintf(t, sizeof(t), LV_SYMBOL_OK " Set: %s, %s", regionCode(m.region).c_str(), optName(PRESETS, m.preset));
++            if (m.slot)
++                snprintf(t + n, sizeof(t) - n, ", slot %u", (unsigned)m.slot);
++            ui->showToast(t, 6000);
++        },
++        LV_EVENT_VALUE_CHANGED, this);
 +    r = settingsRow(cr, "Device role");
 +    setRoleDd = lv_dropdown_create(r);
 +    ctlWidth(setRoleDd);
@@ -7729,19 +7857,11 @@ index 0000000..f8de7c1
 +            if (ui->settingsLoading)
 +                return;
 +            int v = REGIONS[lv_dropdown_get_selected(ui->setRegionDd)].value;
-+            if (v == ui->region || !ui->cbs.setRegion)
++            if (v == ui->region)
 +                return;
-+            if (isHamRegion(v) && !ui->licensed) { // the firmware refuses a ham band outside licensed mode
-+                lv_dropdown_set_selected(ui->setRegionDd, optIndex(REGIONS, ui->region));
-+                ui->showToast(LV_SYMBOL_WARNING " Ham bands: turn on Licensed ham mode first", 6000);
-+                return;
-+            }
-+            const std::vector<int> ok = presetsExact(v);
-+            int p = std::find(ok.begin(), ok.end(), ui->preset) != ok.end() ? ui->preset : defaultPresetFor(v);
-+            if (ui->region == 0 && v == 1)
-+                p = 9; // US picked for the first time: Long Turbo, the 2.8 default on the device screen
-+            ui->cbs.setRegion(v, p);
-+            ui->showToast(LV_SYMBOL_OK " Region set");
++            if (ui->applyRegion(v, -1, 0))
++                ui->showToast(lowBand(v) ? LV_SYMBOL_OK " Region set - this band needs a 433/470 MHz radio" : LV_SYMBOL_OK " Region set",
++                              lowBand(v) ? 6000 : 2500);
 +        },
 +        LV_EVENT_VALUE_CHANGED, this);
 +    lv_obj_add_event_cb(
@@ -8948,6 +9068,26 @@ index 0000000..f8de7c1
 +}
 +
 +// the region and preset dropdowns. No region yet: the radio may only use Long Fast, so the preset waits for one.
++// region change with a preset the firmware accepts there (validateConfigLora drops the change otherwise).
++// wantPreset < 0: keep the current preset if legal, else the region's default. slot 0: the preset's default slot.
++bool HopticsUI::applyRegion(int v, int wantPreset, uint32_t slot)
++{
++    if (!cbs.setRegion)
++        return false;
++    if (isHamRegion(v) && !licensed) { // the firmware refuses a ham band outside licensed mode
++        refreshRadioSettings();
++        showToast(LV_SYMBOL_WARNING " Ham bands: turn on Licensed ham mode first", 6000);
++        return false;
++    }
++    const std::vector<int> ok = presetsExact(v);
++    auto legal = [&](int p) { return std::find(ok.begin(), ok.end(), p) != ok.end(); };
++    int p = wantPreset >= 0 && legal(wantPreset) ? wantPreset : legal(preset) ? preset : defaultPresetFor(v);
++    if (wantPreset < 0 && region == 0 && v == 1)
++        p = 9; // US picked for the first time: Long Turbo, the 2.8 default on the device screen
++    cbs.setRegion(v, p, slot);
++    return true;
++}
++
 +void HopticsUI::refreshRadioSettings(void)
 +{
 +    if (!setRegionDd)
@@ -8955,6 +9095,13 @@ index 0000000..f8de7c1
 +    const bool was = settingsLoading;
 +    settingsLoading = true; // setting the dropdowns must not send anything
 +    lv_dropdown_set_selected(setRegionDd, optIndex(REGIONS, region));
++    if (countryIdx) { // the chosen country stays shown while the region is one of its own
++        const Country &c = COUNTRIES[countryIdx - 1];
++        if (region != c.r[0] && region != c.r[1])
++            countryIdx = 0;
++    }
++    lv_dropdown_set_selected(setCountryDd, countryIdx);
++    lv_dropdown_set_selected(setMeshDd, 0); // an action, not a setting
 +    std::vector<Opt> po = presetsFor(region);
 +    std::vector<int> vals;
 +    for (const Opt &o : po)
@@ -10340,11 +10487,7 @@ index 0000000..f8de7c1
 +        keyScope();
 +        if (cbs.setTheme)
 +            cbs.setTheme(wizTheme);
-+        if (reg != 0 && cbs.setRegion && !isHamRegion(reg)) {
-+            const std::vector<int> ok = presetsExact(reg);
-+            const int p = region == 0 && reg == 1 ? 9 /* Long Turbo: the 2.8 default for a first US pick */
-+                          : std::find(ok.begin(), ok.end(), preset) != ok.end() ? preset : defaultPresetFor(reg);
-+            cbs.setRegion(reg, p);
++        if (reg != 0 && !isHamRegion(reg) && applyRegion(reg, -1, 0)) {
 +            showToast(LV_SYMBOL_OK " Saved. Your region is set.", 6000);
 +        } else if (isHamRegion(reg)) {
 +            showToast(LV_SYMBOL_WARNING " Saved. Ham bands: Settings > Radio > Licensed ham mode", 8000);
@@ -11452,7 +11595,7 @@ index 0000000..f8de7c1
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..aa23704
+index 0000000..d68a58e
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
 @@ -0,0 +1,1173 @@
@@ -11992,14 +12135,14 @@ index 0000000..aa23704
 +    };
 +    // LoRa changes apply live in Meshtastic 2.8 (no restart, and the radio sends no new config back), so the
 +    // screen keeps its own copy current, as the stock MUI does
-+    cb.setRegion = [this](int r, int p) {
++    cb.setRegion = [this](int r, int p, uint32_t slot) {
 +        if (!haveLora)
 +            return;
 +        meshtastic_Config_LoRaConfig l = lora;
 +        l.region = (meshtastic_Config_LoRaConfig_RegionCode)r;
 +        l.use_preset = true;
 +        l.modem_preset = (meshtastic_Config_LoRaConfig_ModemPreset)p; // one the region allows, or the change is refused
-+        l.channel_num = 0;
++        l.channel_num = slot; // 0: the preset's default slot
 +        l.tx_enabled = true;
 +        lora = l;
 +        controller->sendConfig(std::move(l), ownNode);

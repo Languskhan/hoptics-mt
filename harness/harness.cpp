@@ -560,7 +560,8 @@ int main(int argc, char **argv)
     { // Radio settings (Meshtastic 2.8 region rules): presets per region, a region change keeps a legal preset,
       // ham bands only in licensed mode, licensed mode asks twice
         int sentRegion = -1, sentPreset = -1, sentLic = -1, presetSet = -1;
-        ui.cbs.setRegion = [&](int r, int p) { sentRegion = r; sentPreset = p; };
+        uint32_t sentSlot = 99;
+        ui.cbs.setRegion = [&](int r, int p, uint32_t s) { sentRegion = r; sentPreset = p; sentSlot = s; };
         ui.cbs.setPreset = [&](int p) { presetSet = p; };
         ui.cbs.setLicensed = [&](bool on) { sentLic = on; };
         int rfails = 0;
@@ -637,6 +638,54 @@ int main(int argc, char **argv)
         lv_obj_send_event(ui.setHamSw, LV_EVENT_VALUE_CHANGED, nullptr);
         pump(20);
         rexpect(sentLic == 0 && !ui.licensed, "licensed: off at once");
+        { // Country picker: a legal region for the country, on the band these boards have
+            auto pickIn = [&](lv_obj_t *dd, const char *name) {
+                for (uint32_t i = 0; i < lv_dropdown_get_option_count(dd); i++) {
+                    lv_dropdown_set_selected(dd, i);
+                    char b[64];
+                    lv_dropdown_get_selected_str(dd, b, sizeof(b));
+                    if (!strcmp(b, name))
+                        break;
+                }
+                lv_obj_send_event(dd, LV_EVENT_VALUE_CHANGED, nullptr);
+                pump(20);
+            };
+            ui.setRadio(1, "US", 4, "MediumFast", true, 3, 27, 913.125f);
+            sentRegion = sentPreset = -1;
+            pickIn(ui.setCountryDd, "Germany");
+            rexpect(sentRegion == 3 && sentPreset == 4 && sentSlot == 0 && toastHas("Germany: EU_868 (EU_433 on 433 radios)"),
+                    "country Germany: EU_868, keeps Medium Fast, mentions EU_433");
+            ui.setRadio(3, "EU_868", 4, "MediumFast", true, 3, 27, 869.525f);
+            pump(20);
+            rexpect(lv_dropdown_get_selected(ui.setCountryDd) != 0, "country stays shown while its region is set");
+            lv_obj_scroll_to_view_recursive(ui.setCountryDd, LV_ANIM_OFF);
+            pump(300);
+            shot("09g_settings_country");
+            pickIn(ui.setCountryDd, "Malaysia");
+            rexpect(sentRegion == 17, "country Malaysia: MY_919, not the 433 band");
+            pickIn(ui.setCountryDd, "China");
+            rexpect(sentRegion == 4 && toastHas("470 MHz"), "country China: CN, warns about the 470 MHz radio");
+            ui.setRadio(1, "US", 0, "LongFast", true, 3, 27, 906.875f);
+            pump(20);
+            rexpect(lv_dropdown_get_selected(ui.setCountryDd) == 0, "country cleared when the region is not its own");
+            sentRegion = -1;
+            pickIn(ui.setCountryDd, "United States");
+            rexpect(sentRegion == -1 && toastHas("United States: US"), "country already on its region: nothing sent");
+            // Local mesh: region, preset and slot in one go
+            pickIn(ui.setMeshDd, "USA - Tri-Cities WA");
+            rexpect(sentRegion == 1 && sentPreset == 4 && sentSlot == 45 && toastHas("Set: US, Medium Fast, slot 45"), "local mesh: Sagebrush, Medium Fast, slot 45");
+            pickIn(ui.setMeshDd, "NZ - Wellington");
+            rexpect(sentRegion == 6 && sentPreset == 6 && sentSlot == 16, "local mesh: Wellington, ANZ Short Fast, slot 16");
+            lv_obj_scroll_to_view_recursive(ui.setMeshDd, LV_ANIM_OFF);
+            pump(300);
+            shot("09h_settings_local_mesh");
+            ui.setRadio(6, "ANZ", 6, "ShortFast", true, 3, 30, 918.875f);
+            pump(20);
+            rexpect(lv_dropdown_get_selected(ui.setMeshDd) == 0, "local mesh dropdown back to its prompt");
+            pickIn(ui.setRegionDd, "EU_433 - Europe 433");
+            rexpect(sentRegion == 2 && toastHas("433/470"), "433 region by hand: warns about the radio");
+            lv_obj_add_flag(ui.toast, LV_OBJ_FLAG_HIDDEN);
+        }
         int sentTx = -1, sentSig = -1;
         ui.cbs.setTransmit = [&](bool on) { sentTx = on; };
         ui.cbs.setSigPolicy = [&](int p) { sentSig = p; };
