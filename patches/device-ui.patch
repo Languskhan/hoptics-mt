@@ -737,10 +737,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..8110a3d
+index 0000000..c404118
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,672 @@
+@@ -0,0 +1,676 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -943,8 +943,8 @@ index 0000000..8110a3d
 +        // MQTT module + "OK to MQTT" (LoRa config) + downlink on the primary channel. pass nullptr keeps the saved one.
 +        // Only the parts that changed are sent; the radio restarts to apply them.
 +        std::function<void(bool enabled, const char *server, const char *user, const char *pass, const char *root,
-+                           bool okToMqtt, bool downlink, bool uplink)>
-+            setMqtt;
++                           bool okToMqtt, bool downlink, bool uplink, uint8_t flags)>
++            setMqtt; // flags: MQTT_ENC | MQTT_TLS | MQTT_JSON | MQTT_MAP | MQTT_PROXY
 +    };
 +
 +    enum Theme { TH_MIDNIGHT = 0, TH_DAYLIGHT, TH_NIGHT_RED, TH_AMBER, TH_COUNT };
@@ -984,9 +984,11 @@ index 0000000..8110a3d
 +    void setBluetoothEnabled(bool on, uint32_t fixedPin = 0);
 +    void setWifiConfig(const char *ssid, bool hasPassword);
 +    // MQTT settings as the radio has them (server "" = the public Meshtastic server)
-+    void setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root);
++    void setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root,
++                       uint8_t flags = 1);
 +    void setOkToMqtt(bool on);
 +    void setDownlink(bool on); // primary channel downlink
++    uint8_t mqttFlagsFromSwitches(void) const;
 +    void setUplink(bool on);   // primary channel uplink (a gateway: what this radio hears goes to the server)
 +    // reach check (HopticsReach.h): one of our messages, opened from its chat bubble
 +    void openReach(uint32_t requestId);
@@ -1260,8 +1262,10 @@ index 0000000..8110a3d
 +    bool wifiHasPsk = false;
 +    // MQTT / reach check
 +    lv_obj_t *setMqttSw = nullptr, *setMqttServer = nullptr, *setMqttUser = nullptr, *setMqttPass = nullptr,
-+             *setMqttRoot = nullptr, *setOkMqttSw = nullptr, *setDownSw = nullptr, *setUpSw = nullptr, *setMqttCheck[4] = {};
++             *setMqttRoot = nullptr, *setOkMqttSw = nullptr, *setDownSw = nullptr, *setUpSw = nullptr, *setMqttFlag[5] = {}, *setMqttCheck[4] = {};
 +    bool mqttEnabled = false, mqttHasPass = false, okToMqtt = false, downlinkOn = false, uplinkOn = false;
++    uint8_t mqttFlags = 1; // MQTT_* bits as the radio has them (encryption on by default)
++    enum { MQTT_ENC = 1, MQTT_TLS = 2, MQTT_JSON = 4, MQTT_MAP = 8, MQTT_PROXY = 16 };
 +    char mqttServer[65] = {0}, mqttUser[65] = {0}, mqttRoot[33] = {0};
 +    lv_obj_t *reachOv = nullptr, *reachOvTitle = nullptr, *reachText = nullptr, *reachSum = nullptr, *reachSub = nullptr,
 +             *reachBars = nullptr, *reachGw = nullptr, *reachHelp = nullptr;
@@ -3454,10 +3458,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..d6fbc91
+index 0000000..8314afc
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7617 @@
+@@ -0,0 +1,7636 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -7907,6 +7911,12 @@ index 0000000..d6fbc91
 +    switchRow(cmq, "Others may upload my messages", &setOkMqttSw);
 +    switchRow(cmq, "Receive MQTT on the primary channel", &setDownSw);
 +    switchRow(cmq, "Upload what I hear (gateway)", &setUpSw);
++    // the rest of Meshtastic's MQTT settings
++    switchRow(cmq, "Encrypt what goes to the server", &setMqttFlag[0]);
++    switchRow(cmq, "TLS (secure connection)", &setMqttFlag[1]);
++    switchRow(cmq, "JSON copies (for home automation)", &setMqttFlag[2]);
++    switchRow(cmq, "Map report (approximate location)", &setMqttFlag[3]);
++    switchRow(cmq, "Through the phone app (proxy)", &setMqttFlag[4]);
 +    lv_obj_t *msave = flatButton(cmq, LV_SYMBOL_SAVE " Save & restart", C_CYAN, LV_PCT(100), 34);
 +    stop(msave);
 +    lv_obj_add_event_cb(
@@ -7934,7 +7944,7 @@ index 0000000..d6fbc91
 +                                lv_textarea_get_text(ui->setMqttUser), pass[0] ? pass : nullptr,
 +                                lv_textarea_get_text(ui->setMqttRoot), lv_obj_has_state(ui->setOkMqttSw, LV_STATE_CHECKED),
 +                                lv_obj_has_state(ui->setDownSw, LV_STATE_CHECKED),
-+                                lv_obj_has_state(ui->setUpSw, LV_STATE_CHECKED));
++                                lv_obj_has_state(ui->setUpSw, LV_STATE_CHECKED), ui->mqttFlagsFromSwitches());
 +            setButtonText(b, "Restarting...");
 +            ui->showToast(LV_SYMBOL_REFRESH " MQTT saved - restarting", 6000);
 +        },
@@ -8259,6 +8269,8 @@ index 0000000..d6fbc91
 +    else
 +        lv_obj_remove_state(setDownSw, LV_STATE_CHECKED);
 +    lv_obj_set_state(setUpSw, LV_STATE_CHECKED, uplinkOn);
++    for (int i = 0; i < 5; i++)
++        lv_obj_set_state(setMqttFlag[i], LV_STATE_CHECKED, (mqttFlags >> i) & 1);
 +    lv_textarea_set_text(setMqttServer, mqttServer);
 +    lv_textarea_set_text(setMqttUser, mqttUser);
 +    lv_textarea_set_text(setMqttRoot, mqttRoot);
@@ -8719,9 +8731,20 @@ index 0000000..d6fbc91
 +    wifiHasPsk = hasPassword;
 +}
 +
-+void HopticsUI::setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root)
++uint8_t HopticsUI::mqttFlagsFromSwitches(void) const
++{
++    uint8_t f = 0;
++    for (int i = 0; i < 5; i++)
++        if (setMqttFlag[i] && lv_obj_has_state(setMqttFlag[i], LV_STATE_CHECKED))
++            f |= 1 << i;
++    return f;
++}
++
++void HopticsUI::setMqttConfig(bool enabled, const char *server, const char *user, bool hasPassword, const char *root,
++                              uint8_t flags)
 +{
 +    mqttEnabled = enabled;
++    mqttFlags = flags;
 +    snprintf(mqttServer, sizeof(mqttServer), "%s", server ? server : "");
 +    snprintf(mqttUser, sizeof(mqttUser), "%s", user ? user : "");
 +    snprintf(mqttRoot, sizeof(mqttRoot), "%s", root ? root : "");
@@ -11077,10 +11100,10 @@ index 0000000..d6fbc91
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..4b744ef
+index 0000000..9c748a3
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,904 @@
+@@ -0,0 +1,921 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -11469,7 +11492,7 @@ index 0000000..4b744ef
 +        armRebootFallback();
 +    };
 +    cb.setMqtt = [this](bool enabled, const char *server, const char *user, const char *pass, const char *root, bool okToMqtt,
-+                        bool downlink, bool uplink) {
++                        bool downlink, bool uplink, uint8_t flags) {
 +        // only what changed: each of these restarts the radio, and the restart is delayed long enough for all three
 +        if (haveChannel0 && channel0.has_settings &&
 +            (channel0.settings.downlink_enabled != downlink || channel0.settings.uplink_enabled != uplink)) {
@@ -11498,7 +11521,21 @@ index 0000000..4b744ef
 +            snprintf(m.password, sizeof(m.password), "%s", pass ? pass : "sekrit");
 +        }
 +        snprintf(m.root, sizeof(m.root), "%s", root && root[0] ? root : "msh/US");
++        m.encryption_enabled = flags & HopticsUI::MQTT_ENC;
++        m.tls_enabled = flags & HopticsUI::MQTT_TLS;
++        m.json_enabled = flags & HopticsUI::MQTT_JSON;
++        m.proxy_to_client_enabled = flags & HopticsUI::MQTT_PROXY;
++        m.map_reporting_enabled = flags & HopticsUI::MQTT_MAP;
++        if (m.map_reporting_enabled) { // the map needs a location to show: an approximate one unless set otherwise
++            m.has_map_report_settings = true;
++            m.map_report_settings.should_report_location = true;
++            if (!m.map_report_settings.position_precision)
++                m.map_report_settings.position_precision = 14; // about 1.5 km
++        }
 +        const bool changed = !haveMqtt || m.enabled != mqtt.enabled || strcmp(m.address, mqtt.address) ||
++                             m.encryption_enabled != mqtt.encryption_enabled || m.tls_enabled != mqtt.tls_enabled ||
++                             m.json_enabled != mqtt.json_enabled || m.proxy_to_client_enabled != mqtt.proxy_to_client_enabled ||
++                             m.map_reporting_enabled != mqtt.map_reporting_enabled ||
 +                             strcmp(m.username, mqtt.username) || strcmp(m.root, mqtt.root) || pass ||
 +                             (blankServer && strcmp(mqtt.password, "large4cats"));
 +        if (changed) {
@@ -11823,8 +11860,11 @@ index 0000000..4b744ef
 +    haveMqtt = true;
 +    // the firmware's own default server shows as blank: "blank = public Meshtastic server"
 +    const bool isDefault = strcmp(cfg.address, "mqtt.meshtastic.org") == 0;
++    const uint8_t flags = (cfg.encryption_enabled ? HopticsUI::MQTT_ENC : 0) | (cfg.tls_enabled ? HopticsUI::MQTT_TLS : 0) |
++                          (cfg.json_enabled ? HopticsUI::MQTT_JSON : 0) | (cfg.map_reporting_enabled ? HopticsUI::MQTT_MAP : 0) |
++                          (cfg.proxy_to_client_enabled ? HopticsUI::MQTT_PROXY : 0);
 +    ui.setMqttConfig(cfg.enabled, isDefault ? "" : cfg.address, isDefault && strcmp(cfg.username, "meshdev") == 0 ? "" : cfg.username,
-+                     cfg.password[0] != 0, cfg.root);
++                     cfg.password[0] != 0, cfg.root, flags);
 +}
 +
 +void HopticsView::updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg)

@@ -694,6 +694,34 @@ int main(int argc, char **argv)
     lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setDownSw))), 0, -230, LV_ANIM_OFF);
     pump(20);
     shot("56c_settings_mqtt_setup");
+    { // MQTT: BayMesh-style gateway (uplink on, downlink off) and the other module settings reach the callback
+        int up = -1, down = -1, fl = -1;
+        ui.cbs.setMqtt = [&](bool, const char *, const char *, const char *, const char *, bool, bool d, bool u, uint8_t f) {
+            down = d;
+            up = u;
+            fl = f;
+        };
+        ui.setMqttConfig(true, "mqtt.bayme.sh", "meshdev", true, "msh/US/bayarea", HopticsUI::MQTT_ENC);
+        ui.setDownlink(false);
+        ui.setUplink(false);
+        ui.openSettings();
+        pump(20);
+        bool ok = lv_obj_has_state(ui.setMqttFlag[0], LV_STATE_CHECKED) && !lv_obj_has_state(ui.setMqttFlag[3], LV_STATE_CHECKED);
+        lv_obj_add_state(ui.setUpSw, LV_STATE_CHECKED);
+        lv_obj_add_state(ui.setMqttFlag[3], LV_STATE_CHECKED); // map report
+        ui.cbs.setMqtt(true, "mqtt.bayme.sh", "meshdev", nullptr, "msh/US/bayarea", true,
+                       lv_obj_has_state(ui.setDownSw, LV_STATE_CHECKED), lv_obj_has_state(ui.setUpSw, LV_STATE_CHECKED),
+                       ui.mqttFlagsFromSwitches());
+        ok = ok && up == 1 && down == 0 && fl == (HopticsUI::MQTT_ENC | HopticsUI::MQTT_MAP);
+        printf("%s mqtt: gateway uplink, no downlink, encryption + map report\n", ok ? "ok  " : "FAIL");
+        lv_obj_scroll_to_view_recursive(ui.setMqttFlag[4], LV_ANIM_OFF);
+        pump(20);
+        shot("56d_settings_mqtt_more");
+        ui.cbs.setMqtt = nullptr;
+        ui.setUplink(false);
+        if (!ok)
+            return 1;
+    }
     ui.setDownlink(true);
     ui.closeSettings();
     ui.openChat(1);
