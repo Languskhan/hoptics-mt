@@ -879,7 +879,7 @@ index 44d2400..c4311cb 100644
      static constexpr uint16_t nodeInfoTargetEntries() { return kNodeInfoCacheEntries; }
  
 diff --git a/src/mqtt/MQTT.cpp b/src/mqtt/MQTT.cpp
-index ea1d5dd..bbbb272 100644
+index ea1d5dd..373fb69 100644
 --- a/src/mqtt/MQTT.cpp
 +++ b/src/mqtt/MQTT.cpp
 @@ -50,6 +50,12 @@
@@ -908,6 +908,20 @@ index ea1d5dd..bbbb272 100644
      if (strcmp(e.gateway_id, nodeId.c_str()) == 0) {
          // Generate an implicit ACK towards ourselves (handled and processed only locally!) for this message.
          // We do this because packets are not rebroadcasted back into MQTT anymore and we assume that at least one node
+@@ -309,7 +321,13 @@ bool connectPubSub(const PubSubConfig &config, PubSubClient &pubSub, Client &cli
+         LOG_INFO("MQTT connected");
+     } else {
+         isConnected = false;
++#ifdef HOPTICS_UI
++        // why, in PubSubClient's words: -2 no network connection (DNS / TCP / TLS), 4 bad username or password,
++        // 5 not authorized, 2 client ID refused, 3 server unavailable
++        LOG_WARN("MQTT server connect failed (state %d)", pubSub.state());
++#else
+         LOG_WARN("MQTT server connect failed");
++#endif
+     }
+     return connected;
+ }
 diff --git a/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini b/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
 index fc8c3be..4d90f88 100644
 --- a/variants/esp32s3/ELECROW-ThinkNode-M9/platformio.ini
