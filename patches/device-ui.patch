@@ -2499,10 +2499,10 @@ index 0000000..4e86df6
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsTiles.cpp b/source/graphics/TFT/HopticsTiles.cpp
 new file mode 100644
-index 0000000..d487270
+index 0000000..0b0be17
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsTiles.cpp
-@@ -0,0 +1,1270 @@
+@@ -0,0 +1,1272 @@
 +/**
 + * Hoptics MT street map engine - see HopticsTiles.h. GPL-3.0.
 + */
@@ -2526,6 +2526,11 @@ index 0000000..d487270
 +#include "graphics/view/TFT/HopticsMapRoots.h"
 +#include <HTTPClient.h>
 +#include <LittleFS.h>
++#if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
++#include "util/ISpiLock.h"
++#include <SD.h>
++#define HX_SD 1
++#endif
 +#include <WiFi.h>
 +#include <WiFiClientSecure.h>
 +#else
@@ -3178,14 +3183,9 @@ index 0000000..d487270
 +
 +// ------------------------------------------------------------------ saved tiles: SD card, else flash
 +#if defined(ARDUINO_ARCH_ESP32)
-+#if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
-+#include "util/ISpiLock.h"
-+#include <SD.h>
-+#define HX_SD 1
-+#endif
 +namespace
 +{
-+fs::FS *tfs = &LittleFS; // where saved tiles live
++::fs::FS *tfs = &LittleFS; // where saved tiles live
 +bool tilesOnSd = false;
 +uint64_t sdFreeAtStart = 0;  // the card's free space when it was picked (FAT's free count is slow to ask)
 +uint32_t savedAtStart = 0;   // savedBytes then
@@ -3218,7 +3218,7 @@ index 0000000..d487270
 +    size_t total = LittleFS.totalBytes(), used = LittleFS.usedBytes();
 +    return total > used ? total - used : 0;
 +}
-+// picks the SD card when one is in, and finds a map pack on it (MUI layout: /maps/<style>/z/x/y.png or /map)
++// picks the SD card when one is in, and finds a map pack on it: /maps/<style>, /map (Meshtastic) or /tiles (MeshCore)
 +void pickStorage(void)
 +{
 +#ifdef HX_SD
@@ -3238,6 +3238,8 @@ index 0000000..d487270
 +        }
 +        if (!packDir[0] && SD.exists("/map"))
 +            strcpy(packDir, "/map");
++        if (!packDir[0] && SD.exists("/tiles")) // MeshCore's layout (its T-Deck UI, Ripple, WADAMESH): same z/x/y.png
++            strcpy(packDir, "/tiles");
 +    }
 +    ILOG_INFO("Hoptics map: SD card, %u MB free, map pack %s", (unsigned)(sdFreeAtStart >> 20), packDir[0] ? packDir : "none");
 +#endif
