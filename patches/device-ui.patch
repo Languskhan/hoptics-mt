@@ -667,10 +667,10 @@ index 0000000..3ee18db
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsTiles.h b/include/graphics/view/TFT/HopticsTiles.h
 new file mode 100644
-index 0000000..3e6006c
+index 0000000..579a414
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsTiles.h
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,205 @@
 +#pragma once
 +/**
 + * Hoptics MT street map - OpenStreetMap raster tiles drawn into one RGB565 view buffer.
@@ -700,6 +700,9 @@ index 0000000..3e6006c
 +#endif
 +#ifndef HOPTICS_MAP_CACHE_KB
 +#define HOPTICS_MAP_CACHE_KB 1536 // flash used for saved tiles at most
++#endif
++#ifndef HOPTICS_MAP_SD_CACHE_MB
++#define HOPTICS_MAP_SD_CACHE_MB 1024 // on an SD card: saved tiles at most (the card keeps the rest for other files)
 +#endif
 +#ifndef HOPTICS_MAP_FS_RESERVE_KB
 +#define HOPTICS_MAP_FS_RESERVE_KB 1024 // the node's own files always keep at least this much free space
@@ -757,6 +760,8 @@ index 0000000..3e6006c
 +    bool storageFull = false; // the last tile could not be saved (still shown)
 +    uint32_t savedTiles = 0;
 +    uint32_t savedKB = 0;
++    bool onSd = false;   // saved tiles go to the SD card (else the node's flash)
++    char pack[24] = "";  // a map pack on the card in use (its folder name), or empty
 +};
 +
 +class TileMap
@@ -828,6 +833,7 @@ index 0000000..3e6006c
 +    // flash cache
 +    void loadIndex(void);
 +    bool readSaved(uint8_t z, uint32_t x, uint32_t y, Blob &png, uint32_t &fetched, uint32_t &maxAge, char *etag);
++    bool readPack(uint8_t z, uint32_t x, uint32_t y, Blob &png); // a ready-made map pack on the SD card
 +    void save(uint8_t z, uint32_t x, uint32_t y, const Blob &png, uint32_t maxAge, const char *etag);
 +    void touchSaved(uint8_t z, uint32_t x, uint32_t y, uint32_t maxAge, const char *etag);
 +    void forget(uint8_t z, uint32_t x, uint32_t y);
@@ -2493,10 +2499,10 @@ index 0000000..4e86df6
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsTiles.cpp b/source/graphics/TFT/HopticsTiles.cpp
 new file mode 100644
-index 0000000..6b086bc
+index 0000000..d487270
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsTiles.cpp
-@@ -0,0 +1,1141 @@
+@@ -0,0 +1,1270 @@
 +/**
 + * Hoptics MT street map engine - see HopticsTiles.h. GPL-3.0.
 + */
@@ -2556,7 +2562,7 @@ index 0000000..6b086bc
 +static_assert(sizeof(SavedHeader) == 64, "saved tile header must stay 64 bytes");
 +
 +#if defined(ARDUINO_ARCH_ESP32)
-+const char *kRoot = "/hmap";
++const char *kRoot = "/hmap"; // on an SD card: /hoptics/tiles
 +uint32_t nowMs(void)
 +{
 +    return millis();
@@ -2959,6 +2965,16 @@ index 0000000..6b086bc
 +        if (t.inWorld) {
 +            uint32_t fetched = 0, maxAge = 0;
 +            png.reset();
++            if (readPack(cur.z, t.x, t.y, png)) { // a map pack on the card: never stale, never downloaded
++                if (drawPng(png.data, png.len, t, cur, g)) {
++                    t.shown = true;
++                    dirty = true;
++                    continue;
++                }
++                if (gen.load() != g)
++                    return;
++                png.reset(); // not a 256 px PNG (some packs hold JPEGs): saved copy or download instead
++            }
 +            if (readSaved(cur.z, t.x, t.y, png, fetched, maxAge, t.etag)) {
 +                if (drawPng(png.data, png.len, t, cur, g)) {
 +                    t.shown = true;
@@ -3160,35 +3176,132 @@ index 0000000..6b086bc
 +    stat.savedKB = savedBytes / 1024;
 +}
 +
-+// ------------------------------------------------------------------ flash cache
++// ------------------------------------------------------------------ saved tiles: SD card, else flash
 +#if defined(ARDUINO_ARCH_ESP32)
++#if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
++#include "util/ISpiLock.h"
++#include <SD.h>
++#define HX_SD 1
++#endif
 +namespace
 +{
-+size_t fsFree(void)
++fs::FS *tfs = &LittleFS; // where saved tiles live
++bool tilesOnSd = false;
++uint64_t sdFreeAtStart = 0;  // the card's free space when it was picked (FAT's free count is slow to ask)
++uint32_t savedAtStart = 0;   // savedBytes then
++char packDir[48] = "";       // a map pack on the card: /maps/<style> or /map, tiles as z/x/y.png
++// the SD card can share its SPI bus with the screen and the radio: hold the bus for each file operation
++struct Bus {
++#ifdef HX_SD
++    ISpiLock *l;
++    Bus() : l(tilesOnSd || packDir[0] ? ISpiLock::installed() : nullptr)
++    {
++        if (l)
++            l->lock();
++    }
++    ~Bus()
++    {
++        if (l)
++            l->unlock();
++    }
++#else
++    Bus() {}
++#endif
++};
++size_t fsFree(uint32_t savedBytes)
 +{
++    if (tilesOnSd) {
++        const uint64_t used = savedBytes > savedAtStart ? savedBytes - savedAtStart : 0;
++        const uint64_t f = sdFreeAtStart > used ? sdFreeAtStart - used : 0;
++        return f > SIZE_MAX ? SIZE_MAX : (size_t)f;
++    }
 +    size_t total = LittleFS.totalBytes(), used = LittleFS.usedBytes();
 +    return total > used ? total - used : 0;
 +}
++// picks the SD card when one is in, and finds a map pack on it (MUI layout: /maps/<style>/z/x/y.png or /map)
++void pickStorage(void)
++{
++#ifdef HX_SD
++    {
++        ISpiLock::Guard bus;
++        if (SD.cardType() == CARD_NONE || SD.totalBytes() == 0)
++            return;
++        sdFreeAtStart = SD.totalBytes() - SD.usedBytes();
++        tilesOnSd = true;
++        tfs = &SD;
++        kRoot = "/hoptics/tiles";
++        if (SD.exists("/maps")) {
++            File m = SD.open("/maps");
++            for (File d = m.openNextFile(); d && !packDir[0]; d = m.openNextFile())
++                if (d.isDirectory() && d.name()[0] != '.')
++                    snprintf(packDir, sizeof(packDir), "/maps/%s", d.name());
++        }
++        if (!packDir[0] && SD.exists("/map"))
++            strcpy(packDir, "/map");
++    }
++    ILOG_INFO("Hoptics map: SD card, %u MB free, map pack %s", (unsigned)(sdFreeAtStart >> 20), packDir[0] ? packDir : "none");
++#endif
++}
 +} // namespace
++
++bool TileMap::readPack(uint8_t z, uint32_t x, uint32_t y, Blob &out)
++{
++    if (!packDir[0])
++        return false;
++    char path[80];
++    snprintf(path, sizeof(path), "%s/%u/%u/%u.png", packDir, (unsigned)z, (unsigned)x, (unsigned)y);
++    Bus bus;
++    File f = tfs->open(path, "r");
++    if (!f)
++        return false;
++    const size_t n = f.size();
++    const bool ok = n > 8 && n <= kMaxTileBytes && out.reserve(n) && f.read(out.data, n) == n;
++    f.close();
++    if (ok)
++        out.len = n;
++    return ok;
++}
 +
 +void TileMap::loadIndex(void)
 +{
 +    if (indexLoaded)
 +        return;
 +    indexLoaded = true;
-+    if (!LittleFS.exists(kRoot))
-+        return;
-+    File root = LittleFS.open(kRoot);
-+    if (!root || !root.isDirectory())
-+        return;
-+    for (File d = root.openNextFile(); d; d = root.openNextFile()) {
++    pickStorage();
++    {
++        std::lock_guard<std::mutex> lk(statLock);
++        stat.onSd = tilesOnSd;
++        const char *slash = strrchr(packDir, '/');
++        snprintf(stat.pack, sizeof(stat.pack), "%s", packDir[0] && slash ? slash + 1 : "");
++    }
++    File root;
++    {
++        Bus bus;
++        if (!tfs->exists(kRoot))
++            return;
++        root = tfs->open(kRoot);
++        if (!root || !root.isDirectory())
++            return;
++    }
++    for (;;) {
++        File d;
++        {
++            Bus bus; // one entry at a time, so a big card never holds the bus for long
++            d = root.openNextFile();
++        }
++        if (!d)
++            break;
 +        if (!d.isDirectory())
 +            continue;
 +        int z = atoi(d.name());
 +        if (z < 0 || z > 31)
 +            continue;
 +        dirMade |= 1u << z;
-+        for (File f = d.openNextFile(); f; f = d.openNextFile()) {
++        for (;;) {
++            Bus bus;
++            File f = d.openNextFile();
++            if (!f)
++                break;
 +            unsigned x, y;
 +            if (f.isDirectory() || sscanf(f.name(), "%u_%u.hmt", &x, &y) != 2)
 +                continue;
@@ -3197,7 +3310,9 @@ index 0000000..6b086bc
 +            savedBytes += bytes;
 +        }
 +    }
-+    ILOG_INFO("Hoptics map: %u saved tiles, %u KB", (unsigned)saved.size(), (unsigned)(savedBytes / 1024));
++    savedAtStart = savedBytes;
++    ILOG_INFO("Hoptics map: %u saved tiles, %u KB (%s)", (unsigned)saved.size(), (unsigned)(savedBytes / 1024),
++              tilesOnSd ? "SD card" : "flash");
 +}
 +
 +bool TileMap::readSaved(uint8_t z, uint32_t x, uint32_t y, Blob &out, uint32_t &fetched, uint32_t &maxAge, char *etag)
@@ -3207,7 +3322,8 @@ index 0000000..6b086bc
 +        return false;
 +    char path[48];
 +    tilePath(path, sizeof(path), z, x, y);
-+    File f = LittleFS.open(path, "r");
++    Bus bus;
++    File f = tfs->open(path, "r");
 +    if (!f)
 +        return false;
 +    SavedHeader h;
@@ -3234,11 +3350,14 @@ index 0000000..6b086bc
 +        stat.storageFull = true;
 +        return;
 +    }
++    Bus bus;
 +    if (!(dirMade & (1u << z))) {
-+        char dir[24];
++        char dir[32];
 +        snprintf(dir, sizeof(dir), "%s/%u", kRoot, (unsigned)z);
-+        LittleFS.mkdir(kRoot);
-+        LittleFS.mkdir(dir);
++        if (tilesOnSd)
++            tfs->mkdir("/hoptics");
++        tfs->mkdir(kRoot);
++        tfs->mkdir(dir);
 +        dirMade |= 1u << z;
 +    }
 +    SavedHeader h{};
@@ -3250,12 +3369,12 @@ index 0000000..6b086bc
 +        strcpy(h.etag, etag);
 +    char path[48];
 +    tilePath(path, sizeof(path), z, x, y);
-+    File f = LittleFS.open(path, "w");
++    File f = tfs->open(path, "w");
 +    bool ok = f && f.write((const uint8_t *)&h, sizeof(h)) == sizeof(h) && f.write(png.data, png.len) == png.len;
 +    if (f)
 +        f.close();
 +    if (!ok) {
-+        LittleFS.remove(path);
++        tfs->remove(path);
 +        std::lock_guard<std::mutex> lk(statLock);
 +        stat.storageFull = true;
 +        return;
@@ -3270,7 +3389,8 @@ index 0000000..6b086bc
 +{
 +    char path[48];
 +    tilePath(path, sizeof(path), z, x, y);
-+    File f = LittleFS.open(path, "r+");
++    Bus bus;
++    File f = tfs->open(path, "r+");
 +    if (!f)
 +        return;
 +    SavedHeader h;
@@ -3293,7 +3413,10 @@ index 0000000..6b086bc
 +        return;
 +    char path[48];
 +    tilePath(path, sizeof(path), z, x, y);
-+    LittleFS.remove(path);
++    {
++        Bus bus;
++        tfs->remove(path);
++    }
 +    savedBytes -= it->bytes;
 +    saved.erase(it);
 +}
@@ -3303,15 +3426,17 @@ index 0000000..6b086bc
 +    for (const Saved &s : saved) {
 +        char path[48];
 +        tilePath(path, sizeof(path), s.z, s.x, s.y);
-+        LittleFS.remove(path);
++        Bus bus;
++        tfs->remove(path);
 +    }
++    Bus bus;
 +    for (int z = 0; z < 32; z++)
 +        if (dirMade & (1u << z)) {
-+            char dir[24];
++            char dir[32];
 +            snprintf(dir, sizeof(dir), "%s/%u", kRoot, (unsigned)z);
-+            LittleFS.rmdir(dir);
++            tfs->rmdir(dir);
 +        }
-+    LittleFS.rmdir(kRoot);
++    tfs->rmdir(kRoot);
 +    ILOG_INFO("Hoptics map: cleared %u saved tiles", (unsigned)saved.size());
 +    saved.clear();
 +    savedBytes = 0;
@@ -3360,6 +3485,11 @@ index 0000000..6b086bc
 +    }
 +    closedir(root);
 +    ILOG_INFO("Hoptics map: %u saved tiles, %u KB", (unsigned)saved.size(), (unsigned)(savedBytes / 1024));
++}
++
++bool TileMap::readPack(uint8_t, uint32_t, uint32_t, Blob &)
++{
++    return false; // the PC harness has no SD card (its tile source stands in for the internet)
 +}
 +
 +bool TileMap::readSaved(uint8_t z, uint32_t x, uint32_t y, Blob &out, uint32_t &fetched, uint32_t &maxAge, char *etag)
@@ -3481,7 +3611,12 @@ index 0000000..6b086bc
 +// keep the flash budget: drop the saved tiles farthest from what is on screen until `bytes` fits
 +bool TileMap::makeRoom(uint32_t bytes)
 +{
++#if defined(ARDUINO_ARCH_ESP32)
++    const uint32_t cap = tilesOnSd ? HOPTICS_MAP_SD_CACHE_MB * 1024u * 1024u : HOPTICS_MAP_CACHE_KB * 1024u;
++    const uint32_t reserve = tilesOnSd ? 64u * 1024 * 1024 : HOPTICS_MAP_FS_RESERVE_KB * 1024u; // the card keeps 64 MB free
++#else
 +    const uint32_t cap = HOPTICS_MAP_CACHE_KB * 1024u, reserve = HOPTICS_MAP_FS_RESERVE_KB * 1024u;
++#endif
 +    if (bytes > cap)
 +        return false;
 +    // centre of the current view as a fraction of the world
@@ -3489,7 +3624,7 @@ index 0000000..6b086bc
 +    const double cx = (cur.ox + cur.w / 2) / wz, cy = (cur.oy + cur.h / 2) / wz;
 +    for (;;) {
 +#if defined(ARDUINO_ARCH_ESP32)
-+        const size_t free = fsFree();
++        const size_t free = fsFree(savedBytes);
 +#else
 +        const size_t free = fsFreeHost(savedBytes);
 +#endif
@@ -3640,10 +3775,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..f004877
+index 0000000..781b61a
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,8096 @@
+@@ -0,0 +1,8100 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -9868,8 +10003,12 @@ index 0000000..f004877
 +        refreshMapNote();
 +    if (setOv && setMapInfo && !lv_obj_has_flag(setOv, LV_OBJ_FLAG_HIDDEN)) {
 +        hoptics::MapStatus s = tm.status();
-+        char b[48];
-+        snprintf(b, sizeof(b), "Saved: %u tiles, %u KB", (unsigned)s.savedTiles, (unsigned)s.savedKB);
++        char b[96];
++        int n = s.savedKB >= 10240 ? snprintf(b, sizeof(b), "Saved: %u tiles, %u MB", (unsigned)s.savedTiles, (unsigned)(s.savedKB / 1024))
++                                   : snprintf(b, sizeof(b), "Saved: %u tiles, %u KB", (unsigned)s.savedTiles, (unsigned)s.savedKB);
++        n += snprintf(b + n, sizeof(b) - n, s.onSd ? ", SD card" : "");
++        if (s.pack[0])
++            snprintf(b + n, sizeof(b) - n, " - pack: %s", s.pack);
 +        if (strcmp(lv_label_get_text(setMapInfo), b) != 0)
 +            lv_label_set_text(setMapInfo, b);
 +    }
