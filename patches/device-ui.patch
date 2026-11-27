@@ -751,7 +751,7 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..a92b141
+index 0000000..2f9497f
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
 @@ -0,0 +1,705 @@
@@ -916,6 +916,7 @@ index 0000000..a92b141
 +    };
 +
 +    // Settings > All Meshtastic settings: one entry per Config / ModuleConfig field (tools/make_all_settings.py)
++    enum { MQTT_ENC = 1, MQTT_TLS = 2, MQTT_JSON = 4, MQTT_MAP = 8, MQTT_PROXY = 16 }; // setMqtt flags
 +    enum AllKind : uint8_t { AK_BOOL, AK_NUM, AK_FLOAT, AK_STR, AK_SECRET, AK_ENUM, AK_IP };
 +    struct AllSetting {
 +        uint8_t section;
@@ -1308,7 +1309,6 @@ index 0000000..a92b141
 +             *setMqttRoot = nullptr, *setOkMqttSw = nullptr, *setDownSw = nullptr, *setUpSw = nullptr, *setMqttFlag[5] = {}, *setMqttCheck[4] = {};
 +    bool mqttEnabled = false, mqttHasPass = false, okToMqtt = false, downlinkOn = false, uplinkOn = false;
 +    uint8_t mqttFlags = 1; // MQTT_* bits as the radio has them (encryption on by default)
-+    enum { MQTT_ENC = 1, MQTT_TLS = 2, MQTT_JSON = 4, MQTT_MAP = 8, MQTT_PROXY = 16 };
 +    char mqttServer[65] = {0}, mqttUser[65] = {0}, mqttRoot[33] = {0};
 +    lv_obj_t *reachOv = nullptr, *reachOvTitle = nullptr, *reachText = nullptr, *reachSum = nullptr, *reachSub = nullptr,
 +             *reachBars = nullptr, *reachGw = nullptr, *reachHelp = nullptr;
