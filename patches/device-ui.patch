@@ -878,10 +878,10 @@ index 0000000..579a414
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..210a285
+index 0000000..cbc8162
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,714 @@
+@@ -0,0 +1,720 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -1090,6 +1090,9 @@ index 0000000..210a285
 +        std::function<void(uint32_t convKey)> conversationRead;
 +        std::function<void(int theme)> setTheme;
 +        std::function<void(bool on)> setWebChat;
++        // Settings > Storage: the SD card's size (false: no card), and Files over Wi-Fi on / off
++        std::function<bool(uint64_t &totalBytes, uint64_t &usedBytes)> sdInfo;
++        std::function<void(bool on)> setFiles;
 +        // environment sensors: share = send readings to the mesh every intervalSecs (the radio restarts)
 +        std::function<void(bool share, uint32_t intervalSecs)> setEnvSharing;
 +        // GPS receiver on / off (Config.PositionConfig.gps_mode; the radio restarts)
@@ -1171,6 +1174,7 @@ index 0000000..210a285
 +    void setTheme(int theme); // rebuilds the main screen if it exists
 +    int theme(void) const { return themeIdx; }
 +    void setWebChat(bool on) { webChat = on; }
++    void setFilesCode(uint32_t code); // Files over Wi-Fi: its code, 0 = off (also when it timed out)
 +    // read-only JSON snapshot for the web page / loggers (no DM content ever)
 +    void buildSnapshotJson(std::string &out) const;
 +    void setUiConfig(uint8_t brightness, uint16_t timeout, bool banner);
@@ -1550,7 +1554,9 @@ index 0000000..210a285
 +    lv_obj_t *setOv = nullptr, *setBright = nullptr, *setTimeout = nullptr, *setBanner = nullptr, *setShort = nullptr,
 +             *setLong = nullptr, *setRoleDd = nullptr, *setRegionDd = nullptr, *setPresetDd = nullptr, *setBt = nullptr,
 +             *setInfo = nullptr, *setShutdownBtn = nullptr, *setThemeDd = nullptr, *setBtPin = nullptr, *setWebChatSw = nullptr,
-+             *setMapSw = nullptr, *setMapInfo = nullptr, *setCountryDd = nullptr, *setMeshDd = nullptr, *setTapWakeRow = nullptr, *setTapWakeSw = nullptr;
++             *setMapSw = nullptr, *setMapInfo = nullptr, *setCountryDd = nullptr, *setMeshDd = nullptr, *setTapWakeRow = nullptr, *setTapWakeSw = nullptr, *setSdCard = nullptr, *setSdInfo = nullptr,
++             *setFilesSw = nullptr, *setFilesInfo = nullptr;
++    uint32_t filesCode = 0;
 +    bool tapWake = true, tapWakeAvail = false; // tap-to-wake: on, and the board has a touch screen
 +    uint32_t countryIdx = 0; // Settings country dropdown: 0 none, else COUNTRIES index + 1
 +    bool settingsLoading = false;
@@ -3777,10 +3783,10 @@ index 0000000..0b0be17
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..781b61a
+index 0000000..5be5cf6
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,8100 @@
+@@ -0,0 +1,8167 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -8500,6 +8506,33 @@ index 0000000..781b61a
 +    lv_obj_set_width(mh, LV_PCT(100));
 +    lv_label_set_long_mode(mh, LV_LABEL_LONG_MODE_WRAP);
 +
++    // storage: the SD card, and Files over Wi-Fi (boards with a card slot; loadSettingsValues shows it)
++    setSdCard = card(body, "STORAGE  -  SD CARD");
++    setSdInfo = label(setSdCard, &F14, C_TEXT, "");
++    lv_obj_set_width(setSdInfo, LV_PCT(100));
++    lv_label_set_long_mode(setSdInfo, LV_LABEL_LONG_MODE_WRAP);
++    lv_obj_t *fr = plain(setSdCard);
++    lv_obj_set_size(fr, LV_PCT(100), 30);
++    row(fr, 6);
++    lv_obj_t *fl = label(fr, &F14, C_TEXT, "Files over Wi-Fi");
++    lv_obj_set_flex_grow(fl, 1);
++    setFilesSw = lv_switch_create(fr);
++    stop(setFilesSw);
++    lv_obj_set_style_bg_color(setFilesSw, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++    lv_obj_add_event_cb(
++        setFilesSw,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            if (ui->settingsLoading)
++                return;
++            if (ui->cbs.setFiles)
++                ui->cbs.setFiles(lv_obj_has_state(ui->setFilesSw, LV_STATE_CHECKED));
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++    setFilesInfo = label(setSdCard, &F12, C_MUTED, "");
++    lv_obj_set_width(setFilesInfo, LV_PCT(100));
++    lv_label_set_long_mode(setFilesInfo, LV_LABEL_LONG_MODE_WRAP);
++
 +    // phone app
 +    lv_obj_t *cp = card(body, "PHONE APP");
 +    lv_obj_t *btr = plain(cp);
@@ -8670,6 +8703,22 @@ index 0000000..781b61a
 +        lv_obj_add_state(setBanner, LV_STATE_CHECKED);
 +    else
 +        lv_obj_remove_state(setBanner, LV_STATE_CHECKED);
++    {
++        uint64_t total = 0, used = 0;
++        if (!cbs.sdInfo) // a board without a card slot
++            lv_obj_add_flag(setSdCard, LV_OBJ_FLAG_HIDDEN);
++        else {
++            lv_obj_remove_flag(setSdCard, LV_OBJ_FLAG_HIDDEN);
++            char b[96];
++            if (cbs.sdInfo(total, used))
++                snprintf(b, sizeof(b), "SD card: %.1f GB, %.1f GB free. Map tiles are kept on it.", total / 1e9,
++                         (total > used ? total - used : 0) / 1e9);
++            else
++                snprintf(b, sizeof(b), "No SD card. Put one in (FAT32 or exFAT) for big offline maps, then restart.");
++            lv_label_set_text(setSdInfo, b);
++        }
++        setFilesCode(filesCode); // the switch and its note
++    }
 +    if (tapWakeAvail)
 +        lv_obj_remove_flag(setTapWakeRow, LV_OBJ_FLAG_HIDDEN);
 +    else
@@ -9351,6 +9400,30 @@ index 0000000..781b61a
 +    bluetoothOn = on;
 +    btPin = fixedPin;
 +    refreshStatusBar();
++}
++
++void HopticsUI::setFilesCode(uint32_t code)
++{
++    filesCode = code;
++    if (!setFilesSw)
++        return;
++    const bool was = settingsLoading;
++    settingsLoading = true;
++    if (code)
++        lv_obj_add_state(setFilesSw, LV_STATE_CHECKED);
++    else
++        lv_obj_remove_state(setFilesSw, LV_STATE_CHECKED);
++    settingsLoading = was;
++    char b[160];
++    if (!code)
++        snprintf(b, sizeof(b), "Off. Turn on to manage the card from a browser on your Wi-Fi (maps, logs, backups).");
++    else if (wifiOn && wifiUp && ipAddr)
++        snprintf(b, sizeof(b), "Open http://%u.%u.%u.%u/hoptics/files  -  code %06u. Turns off after 15 min unused.",
++                 (unsigned)(ipAddr & 0xff), (unsigned)((ipAddr >> 8) & 0xff), (unsigned)((ipAddr >> 16) & 0xff),
++                 (unsigned)(ipAddr >> 24), (unsigned)code);
++    else
++        snprintf(b, sizeof(b), "Code %06u  -  waiting for Wi-Fi (Settings > Wi-Fi).", (unsigned)code);
++    lv_label_set_text(setFilesInfo, b);
 +}
 +
 +void HopticsUI::setNetwork(bool on, bool up, uint32_t ip, bool mqtt, int32_t rssi)
@@ -11883,10 +11956,10 @@ index 0000000..781b61a
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..035d888
+index 0000000..6a671a6
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,1182 @@
+@@ -0,0 +1,1219 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
@@ -11912,7 +11985,24 @@ index 0000000..035d888
 +#include <utility>
 +#if defined(ARDUINO_ARCH_ESP32)
 +#include "esp_random.h"
++#if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
++#include "util/ISpiLock.h"
++#include <SD.h>
++#define HX_SD 1
 +#endif
++#endif
++
++// Files over Wi-Fi (the web server's /hoptics/fs/*, firmware side): on only while turned on here, with a code
++// shown on the screen; off by itself after 15 minutes without a request. Read from the web server's task.
++static volatile uint32_t filesCode = 0, filesLastUse = 0;
++extern "C" uint32_t hoptics_files_code(void)
++{
++    return filesCode;
++}
++extern "C" void hoptics_files_used(void)
++{
++    filesLastUse = (uint32_t)time(nullptr);
++}
 +
 +extern const char *firmware_version;
 +
@@ -11988,6 +12078,10 @@ index 0000000..035d888
 +
 +    if (now != lastTick) {
 +        lastTick = now;
++        if (filesCode && (uint32_t)now - filesLastUse > 15 * 60) { // Files over Wi-Fi unused for 15 min: off
++            filesCode = 0;
++            ui.setFilesCode(0);
++        }
 +        ui.tick((uint32_t)now);
 +        hoptics::Report::get().tick();
 +    }
@@ -12405,6 +12499,22 @@ index 0000000..035d888
 +        uiCfg.node_highlight.position_switch = !on;
 +        storeUI();
 +    };
++#ifdef HX_SD
++    cb.sdInfo = [](uint64_t &total, uint64_t &used) {
++        ISpiLock::Guard bus;
++        if (SD.cardType() == CARD_NONE)
++            return false;
++        total = SD.totalBytes();
++        used = SD.usedBytes();
++        return total > 0;
++    };
++    cb.setFiles = [this](bool on) {
++        filesCode = on ? 100000 + esp_random() % 900000 : 0;
++        filesLastUse = (uint32_t)time(nullptr);
++        ILOG_INFO("Hoptics: files over Wi-Fi %s", on ? "on" : "off");
++        ui.setFilesCode(filesCode);
++    };
++#endif
 +    cb.setWebChat = [this](bool on) {
 +        uiCfg.has_node_highlight = true;
 +        uiCfg.node_highlight.chat_switch = on;

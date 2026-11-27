@@ -373,7 +373,7 @@ index 3590cfd..319d1e6 100644
                  LOG_DEBUG("Got client heartbeat");
              }
 diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
-index 7f9fbc4..0bfe761 100644
+index 7f9fbc4..4ec41e7 100644
 --- a/src/mesh/http/ContentHandler.cpp
 +++ b/src/mesh/http/ContentHandler.cpp
 @@ -38,6 +38,25 @@
@@ -514,7 +514,7 @@ index 7f9fbc4..0bfe761 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
      // res->setHeader("Content-Type", "text/html");
  
-@@ -924,3 +955,61 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+@@ -924,3 +955,343 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
      writeAll(res, out);
  }
  #endif
@@ -567,13 +567,295 @@ index 7f9fbc4..0bfe761 100644
 +    res->print("Hoptics MT dashboard: /hoptics");
 +}
 +
++#if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
++// ---- Files over Wi-Fi: the SD card, only while it is turned on on the radio's own screen (Settings > Storage),
++// which shows a 6-digit code that every request must carry in X-Hoptics-Code. The custom header also keeps
++// other websites out (a browser won't send it cross-site without CORS, which we never allow). It turns itself
++// off after 15 minutes without use. Paths stay on the card: no "..", no backslashes, no control characters.
++#include "mesh/http/HopticsFilesPage.h"
++#include <SD.h>
++extern "C" uint32_t hoptics_files_code(void); // 0: turned off
++extern "C" void hoptics_files_used(void);
++
++static uint8_t filesBad = 0;
++static uint32_t filesLockedUntil = 0;
++
++static void filesJson(HTTPResponse *res, int code, const char *json)
++{
++    res->setStatusCode(code);
++    res->setHeader("Content-Type", "application/json");
++    res->print(json);
++}
++
++static bool filesAuth(HTTPRequest *req, HTTPResponse *res)
++{
++    if (webServerThread)
++        webServerThread->markActivity();
++    hopticsSecurityHeaders(res);
++    const uint32_t code = hoptics_files_code();
++    if (!code) {
++        filesJson(res, 403, "{\"error\":\"Turn on Files over Wi-Fi on the radio (Settings > Storage)\"}");
++        return false;
++    }
++    if ((int32_t)(millis() - filesLockedUntil) < 0) {
++        filesJson(res, 429, "{\"error\":\"Too many wrong codes: wait a minute\"}");
++        return false;
++    }
++    if (strtoul(req->getHeader("X-Hoptics-Code").c_str(), nullptr, 10) != code) {
++        if (++filesBad >= 5) {
++            filesBad = 0;
++            filesLockedUntil = millis() + 60000;
++        }
++        filesJson(res, 401, "{\"error\":\"Wrong code: it is on the radio's screen\"}");
++        return false;
++    }
++    filesBad = 0;
++    hoptics_files_used();
++    bool card;
++    {
++        concurrency::LockGuard g(spiLock);
++        card = SD.cardType() != CARD_NONE;
++    }
++    if (!card) {
++        filesJson(res, 503, "{\"error\":\"No SD card in the radio\"}");
++        return false;
++    }
++    return true;
++}
++
++// the "path" parameter, if it is a clean absolute path on the card
++static bool filesPath(HTTPRequest *req, std::string &p)
++{
++    if (!req->getParams()->getQueryParameter("path", p) || p.empty() || p[0] != '/' || p.size() > 200)
++        return false;
++    for (size_t i = 0; i < p.size(); i++) {
++        const unsigned char c = p[i];
++        if (c < 0x20 || c == 0x7f || c == '\\' || (c == '/' && i + 1 < p.size() && p[i + 1] == '/'))
++            return false;
++    }
++    if (p.find("/../") != std::string::npos || (p.size() >= 3 && p.compare(p.size() - 3, 3, "/..") == 0) ||
++        p.find("/./") != std::string::npos)
++        return false;
++    if (p.size() > 1 && p.back() == '/')
++        p.pop_back();
++    return true;
++}
++
++static void jsonStr(std::string &out, const char *s)
++{
++    out += '"';
++    for (; *s; s++) {
++        const unsigned char c = *s;
++        if (c == '"' || c == '\\') {
++            out += '\\';
++            out += (char)c;
++        } else if (c < 0x20) {
++            char b[8];
++            snprintf(b, sizeof(b), "\\u%04x", c);
++            out += b;
++        } else
++            out += (char)c;
++    }
++    out += '"';
++}
++
++static void handleFilesPage(HTTPRequest *req, HTTPResponse *res)
++{
++    hopticsSecurityHeaders(res);
++    res->setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
++                                              "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
++                                              "form-action 'none'; frame-ancestors 'none'");
++    res->setHeader("Content-Type", "text/html; charset=utf-8");
++    res->write((const uint8_t *)HOPTICS_FILES_PAGE, strlen(HOPTICS_FILES_PAGE));
++}
++
++static void handleFilesList(HTTPRequest *req, HTTPResponse *res)
++{
++    if (!filesAuth(req, res))
++        return;
++    std::string p;
++    if (!filesPath(req, p))
++        return filesJson(res, 400, "{\"error\":\"Bad path\"}");
++    std::string out = "{\"path\":";
++    jsonStr(out, p.c_str());
++    {
++        concurrency::LockGuard g(spiLock);
++        char b[64];
++        snprintf(b, sizeof(b), ",\"total\":%llu,\"used\":%llu,\"items\":[", (unsigned long long)SD.totalBytes(),
++                 (unsigned long long)SD.usedBytes());
++        out += b;
++    }
++    File dir;
++    {
++        concurrency::LockGuard g(spiLock);
++        dir = SD.open(p.c_str());
++    }
++    if (!dir || !dir.isDirectory())
++        return filesJson(res, 404, "{\"error\":\"No such folder\"}");
++    int n = 0;
++    for (; n < 1000; n++) {
++        concurrency::LockGuard g(spiLock); // one entry at a time: the screen and the radio share this bus
++        File f = dir.openNextFile();
++        if (!f)
++            break;
++        const char *name = strrchr(f.name(), '/');
++        if (n)
++            out += ',';
++        out += "{\"n\":";
++        jsonStr(out, name ? name + 1 : f.name());
++        char b[48];
++        snprintf(b, sizeof(b), ",\"d\":%d,\"s\":%u}", f.isDirectory() ? 1 : 0, (unsigned)f.size());
++        out += b;
++    }
++    out += n >= 1000 ? "],\"more\":1}" : "]}";
++    res->setHeader("Content-Type", "application/json");
++    res->write((const uint8_t *)out.data(), out.size());
++}
++
++static void handleFilesGet(HTTPRequest *req, HTTPResponse *res)
++{
++    if (!filesAuth(req, res))
++        return;
++    std::string p;
++    if (!filesPath(req, p))
++        return filesJson(res, 400, "{\"error\":\"Bad path\"}");
++    File f;
++    {
++        concurrency::LockGuard g(spiLock);
++        f = SD.open(p.c_str(), "r");
++    }
++    if (!f || f.isDirectory())
++        return filesJson(res, 404, "{\"error\":\"No such file\"}");
++    res->setHeader("Content-Type", "application/octet-stream");
++    res->setHeader("Content-Length", std::to_string((unsigned)f.size()));
++    static uint8_t buf[4096];
++    for (;;) {
++        size_t n;
++        {
++            concurrency::LockGuard g(spiLock);
++            n = f.read(buf, sizeof(buf));
++        }
++        if (!n)
++            break;
++        res->write(buf, n);
++        if (webServerThread)
++            webServerThread->markActivity();
++    }
++    concurrency::LockGuard g(spiLock);
++    f.close();
++}
++
++// makes every folder on the way to a file (a dropped folder of map tiles arrives file by file)
++static void filesMkdirs(const std::string &path)
++{
++    for (size_t i = 1; (i = path.find('/', i)) != std::string::npos; i++) {
++        concurrency::LockGuard g(spiLock);
++        SD.mkdir(path.substr(0, i).c_str());
++    }
++}
++
++static void handleFilesPut(HTTPRequest *req, HTTPResponse *res)
++{
++    if (!filesAuth(req, res))
++        return;
++    std::string p;
++    if (!filesPath(req, p) || p == "/")
++        return filesJson(res, 400, "{\"error\":\"Bad path\"}");
++    filesMkdirs(p);
++    File f;
++    {
++        concurrency::LockGuard g(spiLock);
++        f = SD.open(p.c_str(), "w");
++    }
++    if (!f)
++        return filesJson(res, 500, "{\"error\":\"Can't write there\"}");
++    static uint8_t buf[4096];
++    size_t total = 0;
++    bool ok = true;
++    uint32_t lastData = millis();
++    while (!req->requestComplete()) {
++        const size_t n = req->readBytes(buf, sizeof(buf));
++        if (!n) {
++            if (millis() - lastData > 15000) { // the browser went away mid-file
++                ok = false;
++                break;
++            }
++            delay(1);
++            continue;
++        }
++        lastData = millis();
++        if (webServerThread)
++            webServerThread->markActivity();
++        concurrency::LockGuard g(spiLock);
++        if (f.write(buf, n) != n) {
++            ok = false;
++            break;
++        }
++        total += n;
++    }
++    {
++        concurrency::LockGuard g(spiLock);
++        f.close();
++        if (!ok)
++            SD.remove(p.c_str());
++    }
++    if (!ok)
++        return filesJson(res, 507, "{\"error\":\"The card is full or failed\"}");
++    char b[48];
++    snprintf(b, sizeof(b), "{\"ok\":1,\"bytes\":%u}", (unsigned)total);
++    filesJson(res, 200, b);
++}
++
++static void handleFilesMkdir(HTTPRequest *req, HTTPResponse *res)
++{
++    if (!filesAuth(req, res))
++        return;
++    std::string p;
++    if (!filesPath(req, p) || p == "/")
++        return filesJson(res, 400, "{\"error\":\"Bad path\"}");
++    filesMkdirs(p + "/");
++    filesJson(res, 200, "{\"ok\":1}");
++}
++
++static void handleFilesRemove(HTTPRequest *req, HTTPResponse *res)
++{
++    if (!filesAuth(req, res))
++        return;
++    std::string p;
++    if (!filesPath(req, p) || p == "/")
++        return filesJson(res, 400, "{\"error\":\"Bad path\"}");
++    bool ok;
++    {
++        concurrency::LockGuard g(spiLock);
++        File f = SD.open(p.c_str());
++        const bool dir = f && f.isDirectory();
++        if (f)
++            f.close();
++        ok = dir ? SD.rmdir(p.c_str()) : SD.remove(p.c_str());
++    }
++    if (ok)
++        filesJson(res, 200, "{\"ok\":1}");
++    else
++        filesJson(res, 409, "{\"error\":\"Not removed (a folder must be empty)\"}");
++}
++#endif
++
 +// Dashboard-only server for the colour UI: the page, its JSON and a redirect from "/". Nothing that
-+// can change the radio (no /api/v1, no uploads, no reboot), so the radio is safe on a shared network.
++// can change the radio (no /api/v1, no reboot), so the radio is safe on a shared network. The one thing
++// that writes is Files over Wi-Fi (the SD card only, never settings), and only while turned on on the radio.
 +void registerHopticsHandlers(HTTPServer *server)
 +{
 +    server->registerNode(new ResourceNode("/hoptics", "GET", &handleHopticsPage));
 +    server->registerNode(new ResourceNode("/json/hoptics", "GET", &handleHopticsJson));
 +    server->registerNode(new ResourceNode("/", "GET", &handleHopticsRoot));
++#if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
++    server->registerNode(new ResourceNode("/hoptics/files", "GET", &handleFilesPage));
++    server->registerNode(new ResourceNode("/hoptics/fs/ls", "GET", &handleFilesList));
++    server->registerNode(new ResourceNode("/hoptics/fs/get", "GET", &handleFilesGet));
++    server->registerNode(new ResourceNode("/hoptics/fs/put", "POST", &handleFilesPut));
++    server->registerNode(new ResourceNode("/hoptics/fs/mkdir", "POST", &handleFilesMkdir));
++    server->registerNode(new ResourceNode("/hoptics/fs/rm", "POST", &handleFilesRemove));
++#endif
 +}
 +#endif
 diff --git a/src/mesh/http/ContentHandler.h b/src/mesh/http/ContentHandler.h

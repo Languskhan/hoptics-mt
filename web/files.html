@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoptics MT - SD card</title>
+<style>
+:root{--bg:#0a0f14;--bar:#0e151c;--card:#131b24;--card2:#1b2531;--line:#243141;--text:#e6edf3;--muted:#8695a5;--dim:#55636f;
+--cyan:#22d3ee;--green:#34d399;--amber:#fbbf24;--red:#f87171}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--bar);border-bottom:1px solid var(--line)}
+.logo{width:10px;height:10px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
+h1{font-size:16px;letter-spacing:2px;margin:0}
+.sub{color:var(--muted);font-size:12px}
+.grow{flex:1}
+a{color:var(--cyan)}
+button,input{background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit}
+button{cursor:pointer}button:disabled{opacity:.5;cursor:default}
+button.warn{border-color:var(--amber);color:var(--amber)}
+main{max-width:960px;margin:auto;padding:12px;display:grid;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.crumbs button{background:none;border:none;color:var(--cyan);padding:2px 4px}
+.list{margin-top:8px}
+.it{display:grid;grid-template-columns:22px minmax(0,1fr) 90px auto;gap:8px;align-items:center;padding:6px 4px;border-top:1px solid var(--line)}
+.it .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .n.dir{color:var(--cyan);cursor:pointer}
+.it .s{color:var(--muted);font-size:12px;text-align:right}
+.bar{height:6px;border-radius:3px;background:var(--card2);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--cyan);width:0}
+.note{color:var(--muted);font-size:12px}
+.err{color:var(--red)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header><span class="logo"></span><h1>HOPTICS MT</h1><span class="sub">SD card</span><span class="grow"></span><a class="sub" href="/hoptics">Dashboard</a></header>
+<main>
+<div class="card" id="login">
+  <p>Enter the code shown on the radio under <b>Settings &gt; Storage &gt; Files over Wi-Fi</b>.</p>
+  <div class="row"><input id="code" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="off"><button id="go">Open</button></div>
+  <p class="note" id="lmsg"></p>
+</div>
+<div class="card hidden" id="app">
+  <div class="row"><div class="crumbs grow" id="crumbs"></div><span class="note" id="space"></span></div>
+  <div class="row" style="margin-top:8px">
+    <button id="up">Up</button>
+    <button id="mk">New folder</button>
+    <label><button id="upf">Upload files</button><input id="files" type="file" multiple class="hidden"></label>
+    <label><button id="upd">Upload a folder</button><input id="dir" type="file" webkitdirectory class="hidden"></label>
+  </div>
+  <div class="hidden" id="prog"><p class="note" id="ptext"></p><div class="bar"><i id="pbar"></i></div></div>
+  <p class="note" id="msg"></p>
+  <div class="list" id="list"></div>
+  <p class="note">Map packs: upload a folder of tiles into <b>/maps/&lt;name&gt;</b> laid out as zoom/x/y.png (the layout Meshtastic's own maps use; MeshCore's /tiles works too), then restart the radio. Saved map tiles are in /hoptics/tiles.</p>
+</div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+let code = sessionStorage.getItem("hxcode") || "", cwd = "/";
+const size = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : n >= 1e3 ? (n / 1e3).toFixed(0) + " KB" : n + " B";
+const join = (a, b) => (a === "/" ? "" : a) + "/" + b;
+async function call(path, opt = {}) {
+  opt.headers = Object.assign({ "X-Hoptics-Code": code }, opt.headers || {});
+  const r = await fetch(path, opt);
+  if (r.status === 401 || r.status === 403) { sessionStorage.removeItem("hxcode"); showLogin((await r.json().catch(() => ({}))).error || "Sign in again"); throw new Error("signed out"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "HTTP " + r.status);
+  return r;
+}
+function showLogin(m) { $("app").classList.add("hidden"); $("login").classList.remove("hidden"); $("lmsg").textContent = m || ""; }
+async function open(p) {
+  const r = await call("/hoptics/fs/ls?path=" + encodeURIComponent(p));
+  const d = await r.json();
+  cwd = d.path; $("login").classList.add("hidden"); $("app").classList.remove("hidden");
+  $("space").textContent = size(d.total - d.used) + " free of " + size(d.total);
+  const c = $("crumbs"); c.replaceChildren();
+  const parts = cwd.split("/").filter(Boolean); let acc = "";
+  const crumb = (label, p) => { const b = el("button", "", label); b.onclick = () => go(p); c.append(b, el("span", "note", "/")); };
+  crumb("SD card", "/"); for (const x of parts) { acc += "/" + x; crumb(x, acc); }
+  const items = d.items.sort((a, b) => b.d - a.d || a.n.localeCompare(b.n));
+  const list = $("list"); list.replaceChildren();
+  if (!items.length) list.append(el("p", "note", "Empty folder."));
+  for (const it of items) {
+    const row = el("div", "it");
+    const n = el("span", "n" + (it.d ? " dir" : ""), it.n);
+    const full = join(cwd, it.n);
+    if (it.d) n.onclick = () => go(full);
+    const acts = el("span", "row");
+    if (!it.d) { const dl = el("button", "", "Download"); dl.onclick = () => download(full, it.n); acts.append(dl); }
+    const rm = el("button", "warn", "Delete");
+    rm.onclick = async () => {
+      if (rm.dataset.armed !== "1") { rm.dataset.armed = "1"; rm.textContent = "Sure?"; setTimeout(() => { rm.dataset.armed = ""; rm.textContent = "Delete"; }, 3000); return; }
+      try { await call("/hoptics/fs/rm?path=" + encodeURIComponent(full), { method: "POST" }); go(cwd); } catch (e) { say(e.message, true); }
+    };
+    acts.append(rm);
+    row.append(el("span", "", it.d ? "\u{1F4C1}" : "\u{1F4C4}"), n, el("span", "s", it.d ? "" : size(it.s)), acts);
+    list.append(row);
+  }
+  if (d.more) list.append(el("p", "note", "Only the first 1000 entries are shown."));
+}
+function say(m, bad) { $("msg").textContent = m; $("msg").className = "note" + (bad ? " err" : ""); }
+async function go(p) { try { say(""); await open(p); } catch (e) { if (e.message !== "signed out") say(e.message, true); } }
+async function download(p, name) {
+  try { const r = await call("/hoptics/fs/get?path=" + encodeURIComponent(p)); const a = el("a"); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+  catch (e) { say(e.message, true); }
+}
+async function upload(list) {
+  const files = [...list].filter((f) => !/(^|\/)\./.test(f.webkitRelativePath || f.name)); // skip hidden files (.DS_Store and the like)
+  if (!files.length) return;
+  const total = files.reduce((s, f) => s + f.size, 0); let done = 0, n = 0;
+  $("prog").classList.remove("hidden");
+  try {
+    for (const f of files) {
+      const rel = (f.webkitRelativePath || f.name).split("/").filter((x) => x && x !== "." && x !== "..").join("/");
+      $("ptext").textContent = "Uploading " + (++n) + " of " + files.length + ": " + rel;
+      for (let tries = 0; ; tries++) {
+        try { await call("/hoptics/fs/put?path=" + encodeURIComponent(join(cwd, rel)), { method: "POST", body: f, headers: { "Content-Type": "application/octet-stream" } }); break; }
+        catch (e) { if (e.message === "signed out" || tries >= 2) throw e; await new Promise((r) => setTimeout(r, 800)); }
+      }
+      done += f.size; $("pbar").style.width = (total ? done / total * 100 : 100) + "%";
+    }
+    say("Uploaded " + files.length + " file" + (files.length > 1 ? "s" : "") + " (" + size(total) + ").");
+  } catch (e) { if (e.message !== "signed out") say("Stopped: " + e.message, true); }
+  $("prog").classList.add("hidden"); $("pbar").style.width = "0"; go(cwd);
+}
+$("go").onclick = () => { code = $("code").value.trim(); sessionStorage.setItem("hxcode", code); go(cwd); };
+$("code").onkeydown = (e) => { if (e.key === "Enter") $("go").click(); };
+$("up").onclick = () => go(cwd.replace(/\/[^/]*$/, "") || "/");
+$("mk").onclick = async () => {
+  const name = (prompt("Folder name") || "").trim();
+  if (!name || /[\/\\]|^\.\.?$/.test(name)) return;
+  try { await call("/hoptics/fs/mkdir?path=" + encodeURIComponent(join(cwd, name)), { method: "POST" }); go(cwd); } catch (e) { say(e.message, true); }
+};
+$("upf").onclick = (e) => { e.preventDefault(); $("files").click(); };
+$("upd").onclick = (e) => { e.preventDefault(); $("dir").click(); };
+$("files").onchange = (e) => { upload(e.target.files); e.target.value = ""; };
+$("dir").onchange = (e) => { upload(e.target.files); e.target.value = ""; };
+if (code) go("/"); else showLogin();
+</script>
+</body>
+</html>

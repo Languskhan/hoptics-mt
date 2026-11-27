@@ -666,6 +666,35 @@ int main(int argc, char **argv)
             ui.openSettings();
             pump(20);
         }
+        { // Storage: the SD card and Files over Wi-Fi (the code shows with the address)
+            int filesOn = -1;
+            ui.cbs.sdInfo = [](uint64_t &t, uint64_t &u) { t = 31914983424ull; u = 2147483648ull; return true; };
+            ui.cbs.setFiles = [&](bool on) { filesOn = on; ui.setFilesCode(on ? 48213 : 0); };
+            ui.setNetwork(true, true, 0x0500000a, false, -60); // 10.0.0.5
+            ui.openSettings();
+            pump(20);
+            rexpect(!lv_obj_has_flag(ui.setSdCard, LV_OBJ_FLAG_HIDDEN) && strstr(lv_label_get_text(ui.setSdInfo), "31.9 GB"),
+                    "storage: card size shown");
+            lv_obj_add_state(ui.setFilesSw, LV_STATE_CHECKED);
+            lv_obj_send_event(ui.setFilesSw, LV_EVENT_VALUE_CHANGED, nullptr);
+            pump(20);
+            rexpect(filesOn == 1 && strstr(lv_label_get_text(ui.setFilesInfo), "http://10.0.0.5/hoptics/files") &&
+                        strstr(lv_label_get_text(ui.setFilesInfo), "048213"),
+                    "files over Wi-Fi: address and code");
+            lv_obj_scroll_to_view_recursive(ui.setFilesInfo, LV_ANIM_OFF);
+            pump(300);
+            shot("09j_settings_storage_files");
+            ui.setFilesCode(0); // timed out on the radio
+            pump(20);
+            rexpect(!lv_obj_has_state(ui.setFilesSw, LV_STATE_CHECKED) && strstr(lv_label_get_text(ui.setFilesInfo), "Off"),
+                    "files over Wi-Fi: off again");
+            ui.cbs.sdInfo = nullptr;
+            ui.openSettings();
+            pump(20);
+            rexpect(lv_obj_has_flag(ui.setSdCard, LV_OBJ_FLAG_HIDDEN), "storage: hidden without a card slot");
+            ui.cbs.setFiles = nullptr;
+            ui.setNetwork(false, false, 0, false, 0);
+        }
         { // Country picker: a legal region for the country, on the band these boards have
             auto pickIn = [&](lv_obj_t *dd, const char *name) {
                 for (uint32_t i = 0; i < lv_dropdown_get_option_count(dd); i++) {

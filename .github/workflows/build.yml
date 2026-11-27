@@ -91,6 +91,7 @@ jobs:
           git -C device-ui apply --whitespace=nowarn "$GITHUB_WORKSPACE/patches/device-ui.patch"
           git -C fw apply --whitespace=nowarn "$GITHUB_WORKSPACE/patches/firmware.patch"
           python tools/embed_web.py web/hoptics.html fw/src/mesh/http/HopticsWebPage.h
+          python tools/embed_web.py web/files.html fw/src/mesh/http/HopticsFilesPage.h HOPTICS_FILES_PAGE
           # Settings > All Meshtastic settings: every Config / ModuleConfig field of this firmware's protobufs
           python tools/make_all_settings.py fw/src/mesh/generated/meshtastic device-ui/include/graphics/view/TFT/HopticsAllSettings.h
           # boot-screen art: three original designs from tools/make_boot_bg.py, shown in rotation (one per boot)
