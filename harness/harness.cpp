@@ -694,6 +694,57 @@ int main(int argc, char **argv)
     lv_obj_scroll_by(lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(ui.setDownSw))), 0, -230, LV_ANIM_OFF);
     pump(20);
     shot("56c_settings_mqtt_setup");
+    { // All Meshtastic settings: a generated schema, values in, only the changed ones out
+        std::vector<std::string> secs = {"Device", "LoRa"};
+        std::vector<HopticsUI::AllSetting> fl = {
+            {0, "Role", HopticsUI::AK_ENUM, "Client\nClient mute\nRouter", 0},
+            {0, "Time zone (POSIX)", HopticsUI::AK_STR, "", 64},
+            {1, "Hop limit", HopticsUI::AK_NUM, "", 0},
+            {1, "TX enabled", HopticsUI::AK_BOOL, "", 0},
+            {1, "Frequency offset", HopticsUI::AK_FLOAT, "", 0},
+            {1, "Wi-Fi password", HopticsUI::AK_SECRET, "", 64},
+            {1, "IPv4 config IP", HopticsUI::AK_IP, "", 0},
+        };
+        std::vector<std::string> vals = {"2", "PST8PDT", "3", "1", "0", "", "192.168.1.20"};
+        int reqs = 0, savedSec = -1;
+        std::vector<std::pair<int, std::string>> got;
+        ui.setAllSchema(secs, fl);
+        ui.cbs.allGet = [&](int i) { return vals[i]; };
+        ui.cbs.allLoaded = [&](int) { return true; };
+        ui.cbs.allRequest = [&](int) { reqs++; };
+        ui.cbs.allSave = [&](int s, const std::vector<std::pair<int, std::string>> &c) {
+            savedSec = s;
+            got = c;
+            return 0;
+        };
+        ui.openSettings();
+        pump(20);
+        ui.openAllSettings();
+        pump(50);
+        bool ok = ui.allCur == 0 && ui.allRowW.size() == 2 && reqs == 1;
+        shot("57_all_settings_device");
+        lv_dropdown_set_selected(ui.allSecDd, 1);
+        lv_obj_send_event(ui.allSecDd, LV_EVENT_VALUE_CHANGED, nullptr);
+        pump(50);
+        ok = ok && ui.allCur == 1 && ui.allRowW.size() == 5 && reqs == 2 &&
+             !strcmp(lv_textarea_get_text(ui.allRowW[4]), "192.168.1.20");
+        shot("57b_all_settings_lora");
+        lv_textarea_set_text(ui.allRowW[0], "5");   // hop limit
+        lv_obj_remove_state(ui.allRowW[1], LV_STATE_CHECKED); // TX off
+        lv_obj_send_event(ui.allSaveBtn, LV_EVENT_CLICKED, nullptr);
+        pump(20);
+        ok = ok && savedSec == 1 && got.size() == 2 && got[0].first == 2 && got[0].second == "5" && got[1].first == 3 &&
+             got[1].second == "0";
+        vals[2] = "5";
+        vals[3] = "0";
+        ui.allSectionArrived(1); // the radio's answer after the save: nothing new, no redraw
+        ok = ok && ui.allRowW.size() == 5;
+        printf("%s all settings: sections, values in, only the changes out\n", ok ? "ok  " : "FAIL");
+        ui.closeAllSettings();
+        ui.closeSettings();
+        if (!ok)
+            return 1;
+    }
     { // MQTT: BayMesh-style gateway (uplink on, downlink off) and the other module settings reach the callback
         int up = -1, down = -1, fl = -1;
         ui.cbs.setMqtt = [&](bool, const char *, const char *, const char *, const char *, bool, bool d, bool u, uint8_t f) {

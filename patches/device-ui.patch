@@ -1,3 +1,17 @@
+diff --git a/include/graphics/common/MeshtasticView.h b/include/graphics/common/MeshtasticView.h
+index 15806b2..597a359 100644
+--- a/include/graphics/common/MeshtasticView.h
++++ b/include/graphics/common/MeshtasticView.h
+@@ -120,6 +120,9 @@ class MeshtasticView : public DeviceGUI
+     virtual void updateAmbientLightingModule(const meshtastic_ModuleConfig_AmbientLightingConfig &cfg) {}
+     virtual void updateDetectionSensorModule(const meshtastic_ModuleConfig_DetectionSensorConfig &cfg) {}
+     virtual void updatePaxCounterModule(const meshtastic_ModuleConfig_PaxcounterConfig &cfg) {}
++    // every Config / ModuleConfig as it arrives, whatever its kind (Hoptics: Settings > All Meshtastic settings)
++    virtual void rawConfig(const meshtastic_Config &cfg) {}
++    virtual void rawModuleConfig(const meshtastic_ModuleConfig &cfg) {}
+     virtual void updateFileinfo(const meshtastic_FileInfo &fileinfo) {}
+     virtual void updateRingtone(const char rtttl[231]) {}
+ 
 diff --git a/include/graphics/view/TFT/HopticsBoard.h b/include/graphics/view/TFT/HopticsBoard.h
 new file mode 100644
 index 0000000..1eff63a
@@ -737,10 +751,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..c404118
+index 0000000..a92b141
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,676 @@
+@@ -0,0 +1,705 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -901,7 +915,23 @@ index 0000000..c404118
 +        bool viaMqtt = false;
 +    };
 +
++    // Settings > All Meshtastic settings: one entry per Config / ModuleConfig field (tools/make_all_settings.py)
++    enum AllKind : uint8_t { AK_BOOL, AK_NUM, AK_FLOAT, AK_STR, AK_SECRET, AK_ENUM, AK_IP };
++    struct AllSetting {
++        uint8_t section;
++        std::string label;
++        uint8_t kind;     // AllKind
++        std::string opts; // AK_ENUM: the choices, one per line
++        uint8_t maxLen;   // AK_STR / AK_SECRET
++    };
++
 +    struct Callbacks {
++        // All Meshtastic settings: values as text (bool "1"/"0", enum: the index of its choice)
++        std::function<std::string(int field)> allGet;
++        std::function<bool(int section)> allLoaded;
++        std::function<void(int section)> allRequest; // read it again from the radio
++        // the changed fields only; 0 = sent, -1 = not loaded yet, n > 0 = field n-1 has a bad value
++        std::function<int(int section, const std::vector<std::pair<int, std::string>> &changes)> allSave;
 +        // returns a request id used for delivery status, 0 if not sent
 +        std::function<uint32_t(uint32_t convKey, const char *text)> sendText;
 +        std::function<void(uint32_t node)> traceRoute;
@@ -1034,6 +1064,11 @@ index 0000000..c404118
 +    bool mapTilesOn(void) const { return mapTiles; }
 +
 +    // problem reports: a QR code that opens a pre-filled GitHub bug report (see HopticsReport.h)
++    void setAllSchema(std::vector<std::string> sections, std::vector<AllSetting> fields);
++    void openAllSettings(void);
++    void closeAllSettings(void);
++    void allSectionArrived(int section); // the radio sent this section: show it if it is on screen
++    void allShowSection(int section);
 +    void openReport(bool forCrash);
 +    void closeReport(void);
 +    void showCrashReportIfAny(void); // after a crash restart: shows the report once
@@ -1254,6 +1289,14 @@ index 0000000..c404118
 +    lv_obj_t *phoneScreen = nullptr, *phoneMsg = nullptr, *phonePin = nullptr, *phoneBtn = nullptr;
 +    lv_obj_t *setToneDd = nullptr;
 +    int toneIdx = 1;
++    std::vector<std::string> allSections;
++    std::vector<AllSetting> allFields;
++    lv_obj_t *allCard = nullptr, *allOv = nullptr, *allSecDd = nullptr, *allList = nullptr, *allSaveBtn = nullptr;
++    int allCur = -1;                // section on screen
++    std::vector<int> allRowField;   // field index of each editor on screen
++    std::vector<lv_obj_t *> allRowW; // its widget
++    std::vector<std::string> allRowWas; // its value when shown
++    void buildAllSettingsOverlay(void);
 +    lv_obj_t *repOv = nullptr, *repTitle = nullptr, *repBanner = nullptr, *repBannerText = nullptr, *repQr = nullptr,
 +             *repText = nullptr, *repClearBtn = nullptr, *repScroll = nullptr;
 +    bool repCrash = false, crashShown = false;
@@ -1419,10 +1462,10 @@ index 0000000..c404118
 +};
 diff --git a/include/graphics/view/TFT/HopticsView.h b/include/graphics/view/TFT/HopticsView.h
 new file mode 100644
-index 0000000..b747d18
+index 0000000..d17f286
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsView.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,119 @@
 +#pragma once
 +/**
 + * HopticsView - adapts the device-ui MeshtasticView/ViewController plumbing (node DB, packets,
@@ -1464,6 +1507,8 @@ index 0000000..b747d18
 +    void updateDeviceConfig(const meshtastic_Config_DeviceConfig &cfg) override;
 +    void updateLoRaConfig(const meshtastic_Config_LoRaConfig &cfg) override;
 +    void updateSecurityConfig(const meshtastic_Config_SecurityConfig &cfg) override;
++    void rawConfig(const meshtastic_Config &cfg) override;
++    void rawModuleConfig(const meshtastic_ModuleConfig &cfg) override;
 +    void updatePositionConfig(const meshtastic_Config_PositionConfig &cfg) override;
 +    void updateBluetoothConfig(const meshtastic_Config_BluetoothConfig &cfg, uint32_t id = 0) override;
 +    void updateNetworkConfig(const meshtastic_Config_NetworkConfig &cfg) override;
@@ -1505,6 +1550,13 @@ index 0000000..b747d18
 +    meshtastic_DeviceUIConfig uiCfg{};
 +    meshtastic_Config_LoRaConfig lora{};
 +    meshtastic_Config_SecurityConfig security{};
++    // Settings > All Meshtastic settings: the last of every kind the radio sent, indexed by its variant tag
++    meshtastic_Config allCfg[12]{};
++    meshtastic_ModuleConfig allMod[20]{};
++    uint32_t haveCfg = 0, haveMod = 0; // bit per tag
++    void wireAllSettings(HopticsUI::Callbacks &cb);
++    uint8_t *allSection(int s, bool *loaded);
++    void allApplyLocal(int s); // after a save: the screen's own copies follow
 +    bool haveSecurity = false;
 +    meshtastic_Config_DeviceConfig device{};
 +    meshtastic_Config_BluetoothConfig bluetooth{};
@@ -3458,10 +3510,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..8314afc
+index 0000000..f8de7c1
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,7636 @@
+@@ -0,0 +1,7870 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -7763,6 +7815,18 @@ index 0000000..8314afc
 +        LV_EVENT_VALUE_CHANGED, this);
 +    lv_obj_add_flag(setSigRow, LV_OBJ_FLAG_HIDDEN);
 +
++    // every Meshtastic setting, by section (generated from the firmware's own protobufs)
++    {
++        lv_obj_t *ca = allCard = card(body, "ALL MESHTASTIC SETTINGS");
++        lv_obj_t *al = label(ca, FSMALL, C_DIM, "Every setting the radio has, section by section, as in the Meshtastic apps.");
++        lv_obj_set_width(al, LV_PCT(100));
++        lv_label_set_long_mode(al, LV_LABEL_LONG_MODE_WRAP);
++        lv_obj_t *ab = flatButton(ca, LV_SYMBOL_LIST " Open all settings", C_CYAN, LV_PCT(100), 34);
++        stop(ab);
++        lv_obj_add_event_cb(
++            ab, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->openAllSettings(); }, LV_EVENT_CLICKED, this);
++    }
++
 +    // wi-fi
 +    lv_obj_t *cwf = card(body, "WI-FI");
 +    lv_obj_t *wfr = plain(cwf);
@@ -8284,6 +8348,7 @@ index 0000000..8314afc
 +        lv_dropdown_set_selected(setLnaDd, lnaMode == 3 ? 0 : (lnaMode == 1 ? 1 : 2));
 +    }
 +    refreshRadioSettings();
++    lv_obj_set_flag(allCard, LV_OBJ_FLAG_HIDDEN, allFields.empty());
 +    lv_obj_set_state(setTxSw, LV_STATE_CHECKED, txEnabled);
 +    if (sigPolicy >= 0 && sigPolicy <= 2) {
 +        lv_obj_remove_flag(setSigRow, LV_OBJ_FLAG_HIDDEN);
@@ -10347,6 +10412,225 @@ index 0000000..8314afc
 +    return b;
 +}
 +
++// ---- Settings > All Meshtastic settings -------------------------------------------------------------------------
++
++void HopticsUI::setAllSchema(std::vector<std::string> sections, std::vector<AllSetting> fields)
++{
++    allSections = std::move(sections);
++    allFields = std::move(fields);
++}
++
++void HopticsUI::buildAllSettingsOverlay(void)
++{
++    allOv = overlayPanel("All settings", nullptr, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->closeAllSettings(); });
++    lv_obj_t *top = plain(allOv);
++    lv_obj_set_size(top, LV_PCT(100), LV_SIZE_CONTENT);
++    lv_obj_set_style_pad_all(top, PAD, 0);
++    column(top, 4);
++    allSecDd = lv_dropdown_create(top);
++    lv_obj_set_width(allSecDd, LV_PCT(100));
++    std::string opts;
++    for (size_t i = 0; i < allSections.size(); i++)
++        opts += (i ? "\n" : "") + allSections[i];
++    lv_dropdown_set_options(allSecDd, opts.c_str());
++    styleDropdown(allSecDd);
++    stop(allSecDd);
++    lv_obj_add_event_cb(
++        allSecDd,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            ui->allShowSection((int)lv_dropdown_get_selected(ui->allSecDd));
++        },
++        LV_EVENT_VALUE_CHANGED, this);
++
++    allList = plain(allOv);
++    lv_obj_set_width(allList, LV_PCT(100));
++    lv_obj_set_flex_grow(allList, 1);
++    lv_obj_add_flag(allList, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_scroll_dir(allList, LV_DIR_VER);
++    lv_obj_set_style_pad_hor(allList, PAD, 0);
++    lv_obj_set_style_pad_bottom(allList, PAD, 0);
++    column(allList, 4);
++
++    lv_obj_t *bot = plain(allOv);
++    lv_obj_set_size(bot, LV_PCT(100), LV_SIZE_CONTENT);
++    lv_obj_set_style_pad_all(bot, PAD, 0);
++    allSaveBtn = flatButton(bot, LV_SYMBOL_SAVE " Save this section", C_CYAN, LV_PCT(100), 34);
++    stop(allSaveBtn);
++    lv_obj_add_event_cb(
++        allSaveBtn,
++        [](lv_event_t *e) {
++            HopticsUI *ui = (HopticsUI *)lv_event_get_user_data(e);
++            ui->hideKeyboard();
++            if (ui->allCur < 0 || !ui->cbs.allSave)
++                return;
++            std::vector<std::pair<int, std::string>> changes;
++            for (size_t r = 0; r < ui->allRowW.size(); r++) {
++                const AllSetting &f = ui->allFields[ui->allRowField[r]];
++                lv_obj_t *w = ui->allRowW[r];
++                std::string v;
++                if (f.kind == AK_BOOL)
++                    v = lv_obj_has_state(w, LV_STATE_CHECKED) ? "1" : "0";
++                else if (f.kind == AK_ENUM)
++                    v = std::to_string(lv_dropdown_get_selected(w));
++                else
++                    v = lv_textarea_get_text(w);
++                if (v != ui->allRowWas[r])
++                    changes.push_back({ui->allRowField[r], v});
++            }
++            if (changes.empty()) {
++                ui->showToast(LV_SYMBOL_OK " Nothing changed");
++                return;
++            }
++            const int rc = ui->cbs.allSave(ui->allCur, changes);
++            if (rc == 0) {
++                for (size_t r = 0; r < ui->allRowW.size(); r++)
++                    for (auto &c : changes)
++                        if (c.first == ui->allRowField[r] && ui->allFields[c.first].kind != AK_SECRET)
++                            ui->allRowWas[r] = c.second;
++                std::string t = std::string(LV_SYMBOL_OK " Saved: ") + ui->allSections[ui->allCur];
++                ui->showToast(t.c_str());
++            } else if (rc < 0)
++                ui->showToast(LV_SYMBOL_WARNING " Not read from the radio yet - try again in a moment");
++            else {
++                std::string t = std::string(LV_SYMBOL_WARNING " Not saved - check: ") + ui->allFields[rc - 1].label;
++                ui->showToast(t.c_str(), 5000);
++            }
++        },
++        LV_EVENT_CLICKED, this);
++}
++
++void HopticsUI::allShowSection(int sec)
++{
++    if (!allOv || sec < 0 || sec >= (int)allSections.size())
++        return;
++    hideKeyboard();
++    allCur = sec;
++    lv_obj_clean(allList);
++    allRowField.clear();
++    allRowW.clear();
++    allRowWas.clear();
++    const bool loaded = cbs.allLoaded && cbs.allLoaded(sec);
++    if (!loaded) {
++        lv_obj_t *l = label(allList, &F14, C_MUTED, "Reading from the radio...");
++        lv_obj_set_width(l, LV_PCT(100));
++        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
++    }
++    if (cbs.allRequest)
++        cbs.allRequest(sec); // fresh values (the answer redraws this section if nothing was typed yet)
++    if (!loaded) {
++        keyScope(allSecDd);
++        return;
++    }
++    for (size_t i = 0; i < allFields.size(); i++) {
++        const AllSetting &f = allFields[i];
++        if (f.section != sec)
++            continue;
++        const std::string v = cbs.allGet ? cbs.allGet((int)i) : "";
++        lv_obj_t *w = nullptr;
++        if (f.kind == AK_BOOL) {
++            lv_obj_t *rr = plain(allList);
++            lv_obj_set_size(rr, LV_PCT(100), LV_SIZE_CONTENT);
++            lv_obj_set_style_min_height(rr, 30, 0);
++            row(rr, 6);
++            lv_obj_set_flex_align(rr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++            lv_obj_t *l = label(rr, &F14, C_TEXT, f.label.c_str());
++            lv_obj_set_flex_grow(l, 1);
++            lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
++            w = lv_switch_create(rr);
++            lv_obj_set_style_bg_color(w, C_CYAN, (lv_style_selector_t)LV_PART_INDICATOR | LV_STATE_CHECKED);
++            lv_obj_set_state(w, LV_STATE_CHECKED, v == "1");
++        } else {
++            lv_obj_t *r = settingsRow(allList, f.label.c_str());
++            if (f.kind == AK_ENUM) {
++                w = lv_dropdown_create(r);
++                lv_dropdown_set_options(w, f.opts.c_str());
++                const int k = atoi(v.c_str());
++                if (k >= 0)
++                    lv_dropdown_set_selected(w, k);
++                ctlWidth(w);
++                styleDropdown(w);
++            } else {
++                w = lv_textarea_create(r);
++                lv_textarea_set_one_line(w, true);
++                if (f.kind == AK_STR || f.kind == AK_SECRET)
++                    lv_textarea_set_max_length(w, f.maxLen);
++                else if (f.kind == AK_IP)
++                    lv_textarea_set_accepted_chars(w, "0123456789.");
++                else
++                    lv_textarea_set_accepted_chars(w, f.kind == AK_FLOAT ? "0123456789-." : "0123456789-");
++                if (f.kind == AK_SECRET) {
++                    lv_textarea_set_password_mode(w, true);
++                    lv_textarea_set_placeholder_text(w, "saved - blank keeps it");
++                }
++                lv_textarea_set_text(w, v.c_str());
++                ctlWidth(w);
++                styleTextarea(w);
++                lv_obj_add_event_cb(
++                    w,
++                    [](lv_event_t *e) {
++                        ((HopticsUI *)lv_event_get_user_data(e))->showKeyboard((lv_obj_t *)lv_event_get_current_target(e));
++                    },
++                    LV_EVENT_CLICKED, this);
++                lv_obj_add_event_cb(
++                    w, [](lv_event_t *e) { ((HopticsUI *)lv_event_get_user_data(e))->hideKeyboard(); }, LV_EVENT_READY, this);
++            }
++        }
++        stop(w);
++        allRowField.push_back((int)i);
++        allRowW.push_back(w);
++        allRowWas.push_back(v);
++    }
++    lv_obj_scroll_to_y(allList, 0, LV_ANIM_OFF);
++    keyScope(allSecDd);
++}
++
++void HopticsUI::allSectionArrived(int sec)
++{
++    if (!allOv || lv_obj_has_flag(allOv, LV_OBJ_FLAG_HIDDEN) || sec != allCur)
++        return;
++    bool same = !allRowW.empty();
++    for (size_t r = 0; r < allRowW.size(); r++) {
++        const AllSetting &f = allFields[allRowField[r]];
++        lv_obj_t *w = allRowW[r];
++        const std::string v = f.kind == AK_BOOL   ? (lv_obj_has_state(w, LV_STATE_CHECKED) ? "1" : "0")
++                              : f.kind == AK_ENUM ? std::to_string(lv_dropdown_get_selected(w))
++                                                  : std::string(lv_textarea_get_text(w));
++        if (v != allRowWas[r])
++            return; // something was typed or switched here: leave it alone
++        same = same && cbs.allGet && cbs.allGet(allRowField[r]) == allRowWas[r];
++    }
++    if (same)
++        return; // the answer to our own request, with nothing new in it
++    auto req = cbs.allRequest; // redraw with the radio's values, without asking it again
++    cbs.allRequest = nullptr;
++    allShowSection(sec);
++    cbs.allRequest = req;
++}
++
++void HopticsUI::openAllSettings(void)
++{
++    if (allFields.empty())
++        return;
++    if (!allOv)
++        buildAllSettingsOverlay();
++    lv_obj_remove_flag(allOv, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_move_to_index(allOv, -1);
++    lv_obj_move_to_index(toast, -1);
++    const int sec = allCur >= 0 ? allCur : 0;
++    lv_dropdown_set_selected(allSecDd, sec);
++    allShowSection(sec);
++}
++
++void HopticsUI::closeAllSettings(void)
++{
++    if (!allOv)
++        return;
++    hideKeyboard();
++    lv_obj_add_flag(allOv, LV_OBJ_FLAG_HIDDEN);
++    keyScope();
++}
++
 +void HopticsUI::openReport(bool forCrash)
 +{
 +    if (!repOv)
@@ -10714,7 +10998,7 @@ index 0000000..8314afc
 +        lv_obj_t *c = lv_obj_get_child(mainScreen, i);
 +        if (lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN))
 +            continue;
-+        if (c == chatOv || c == nodeOv || c == reachOv || c == envOv || c == setOv || c == repOv || c == wizOv || c == locOv)
++        if (c == chatOv || c == nodeOv || c == reachOv || c == envOv || c == setOv || c == repOv || c == wizOv || c == locOv || c == allOv)
 +            return c;
 +    }
 +    return nullptr;
@@ -10855,6 +11139,8 @@ index 0000000..8314afc
 +        closeReach();
 +    else if (ov == envOv)
 +        closeEnv();
++    else if (ov == allOv)
++        closeAllSettings();
 +    else if (ov == setOv)
 +        closeSettings();
 +    else if (ov == repOv)
@@ -11100,16 +11386,17 @@ index 0000000..8314afc
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..9c748a3
+index 0000000..aa23704
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
-@@ -0,0 +1,921 @@
+@@ -0,0 +1,1173 @@
 +/**
 + * HopticsView - see HopticsView.h. GPL-3.0.
 + */
 +#include "graphics/view/TFT/HopticsView.h"
 +#include "graphics/view/TFT/HopticsInput.h"
 +#include "graphics/view/TFT/HopticsReport.h"
++#include "graphics/view/TFT/HopticsAllSettings.h" // generated: tools/make_all_settings.py
 +#include "graphics/common/LoRaPresets.h"
 +#include "graphics/common/Ringtones.h"
 +#if defined(ARDUINO_ARCH_ESP32)
@@ -11312,9 +11599,260 @@ index 0000000..9c748a3
 +}
 +
 +// ---------------------------------------------------------------- user actions -> radio
++// ---- Settings > All Meshtastic settings: every Config / ModuleConfig field, from the generated table ----------
++
++void HopticsView::rawConfig(const meshtastic_Config &cfg)
++{
++    const pb_size_t t = cfg.which_payload_variant;
++    if (t >= sizeof(allCfg) / sizeof(allCfg[0]))
++        return;
++    allCfg[t] = cfg;
++    haveCfg |= 1u << t;
++    for (int s = 0; s < hxall::NUM_SECTIONS; s++)
++        if (!hxall::SECTIONS[s].module && hxall::SECTIONS[s].tag == t)
++            ui.allSectionArrived(s);
++}
++
++void HopticsView::rawModuleConfig(const meshtastic_ModuleConfig &cfg)
++{
++    const pb_size_t t = cfg.which_payload_variant;
++    if (t >= sizeof(allMod) / sizeof(allMod[0]))
++        return;
++    allMod[t] = cfg;
++    haveMod |= 1u << t;
++    for (int s = 0; s < hxall::NUM_SECTIONS; s++)
++        if (hxall::SECTIONS[s].module && hxall::SECTIONS[s].tag == t)
++            ui.allSectionArrived(s);
++}
++
++uint8_t *HopticsView::allSection(int s, bool *loaded)
++{
++    const hxall::Section &sec = hxall::SECTIONS[s];
++    if (sec.module) {
++        *loaded = haveMod & (1u << sec.tag);
++        return (uint8_t *)&allMod[sec.tag].payload_variant; // every union member starts here
++    }
++    *loaded = haveCfg & (1u << sec.tag);
++    return (uint8_t *)&allCfg[sec.tag].payload_variant;
++}
++
++static int64_t readNum(const uint8_t *p, uint8_t size, bool isSigned)
++{
++    switch (size) {
++    case 1:
++        return isSigned ? (int64_t) * (const int8_t *)p : (int64_t) * (const uint8_t *)p;
++    case 2:
++        return isSigned ? (int64_t) * (const int16_t *)p : (int64_t) * (const uint16_t *)p;
++    case 4:
++        return isSigned ? (int64_t) * (const int32_t *)p : (int64_t) * (const uint32_t *)p;
++    default:
++        return isSigned ? *(const int64_t *)p : (int64_t) * (const uint64_t *)p;
++    }
++}
++
++static bool writeNum(uint8_t *p, uint8_t size, bool isSigned, int64_t v)
++{
++    if (size >= 8) { // 64-bit fields: whatever strtoll could read
++        if (!isSigned && v < 0)
++            return false;
++        *(int64_t *)p = v;
++        return true;
++    }
++    const int64_t lo = isSigned ? -(int64_t(1) << (size * 8 - 1)) : 0;
++    const int64_t hi = isSigned ? (int64_t(1) << (size * 8 - 1)) - 1 : (int64_t(1) << (size * 8)) - 1;
++    if (v < lo || v > hi)
++        return false;
++    switch (size) {
++    case 1:
++        *(uint8_t *)p = (uint8_t)v;
++        break;
++    case 2:
++        *(uint16_t *)p = (uint16_t)v;
++        break;
++    default:
++        *(uint32_t *)p = (uint32_t)v;
++    }
++    return true;
++}
++
++void HopticsView::allApplyLocal(int s)
++{
++    const hxall::Section &sec = hxall::SECTIONS[s];
++    if (sec.module) {
++        const meshtastic_ModuleConfig &m = allMod[sec.tag];
++        if (sec.tag == meshtastic_ModuleConfig_mqtt_tag)
++            updateMQTTModule(m.payload_variant.mqtt);
++        else if (sec.tag == meshtastic_ModuleConfig_telemetry_tag)
++            updateTelemetryModule(m.payload_variant.telemetry);
++        return;
++    }
++    const meshtastic_Config &c = allCfg[sec.tag];
++    switch (sec.tag) {
++    case meshtastic_Config_device_tag:
++        updateDeviceConfig(c.payload_variant.device);
++        break;
++    case meshtastic_Config_position_tag:
++        updatePositionConfig(c.payload_variant.position);
++        break;
++    case meshtastic_Config_network_tag:
++        updateNetworkConfig(c.payload_variant.network);
++        break;
++    case meshtastic_Config_lora_tag:
++        updateLoRaConfig(c.payload_variant.lora);
++        break;
++    case meshtastic_Config_security_tag:
++        updateSecurityConfig(c.payload_variant.security);
++        break;
++    default:
++        break; // Bluetooth is left out on purpose: its update can switch the screen to phone mode
++    }
++}
++
++void HopticsView::wireAllSettings(HopticsUI::Callbacks &cb)
++{
++    std::vector<std::string> names;
++    std::vector<HopticsUI::AllSetting> fields;
++    for (int s = 0; s < hxall::NUM_SECTIONS; s++)
++        names.push_back(hxall::SECTIONS[s].name);
++    for (int i = 0; i < hxall::NUM_FIELDS; i++) {
++        const hxall::Field &f = hxall::FIELDS[i];
++        fields.push_back({f.section, f.label, f.kind, f.opts ? f.opts : "", f.kind == hxall::STR || f.kind == hxall::SECRET ? (uint8_t)(f.size - 1) : (uint8_t)0});
++    }
++    ui.setAllSchema(std::move(names), std::move(fields));
++    cb.allLoaded = [this](int s) {
++        bool loaded = false;
++        allSection(s, &loaded);
++        return loaded;
++    };
++    cb.allRequest = [this](int s) { // read it fresh from the radio: the answer comes back through rawConfig
++        const hxall::Section &sec = hxall::SECTIONS[s];
++        meshtastic_AdminMessage a = meshtastic_AdminMessage_init_zero;
++        if (sec.module) {
++            a.which_payload_variant = meshtastic_AdminMessage_get_module_config_request_tag;
++            a.get_module_config_request = (meshtastic_AdminMessage_ModuleConfigType)(sec.tag - 1);
++        } else {
++            a.which_payload_variant = meshtastic_AdminMessage_get_config_request_tag;
++            a.get_config_request = (meshtastic_AdminMessage_ConfigType)(sec.tag - 1);
++        }
++        controller->sendAdminMessage(a, ownNode);
++    };
++    cb.allGet = [this](int i) -> std::string {
++        const hxall::Field &f = hxall::FIELDS[i];
++        bool loaded = false;
++        const uint8_t *p = allSection(f.section, &loaded) + f.offset;
++        if (!loaded)
++            return "";
++        char b[48];
++        switch (f.kind) {
++        case hxall::BOOL:
++            return *(const bool *)p ? "1" : "0";
++        case hxall::FLOAT:
++            snprintf(b, sizeof(b), "%g", (double)*(const float *)p);
++            return b;
++        case hxall::STR:
++            return std::string((const char *)p, strnlen((const char *)p, f.size));
++        case hxall::SECRET:
++            return ""; // never shown; blank keeps it
++        case hxall::IP: {
++            const uint32_t v = *(const uint32_t *)p; // first octet in the low byte, as IPAddress(uint32_t) reads it
++            snprintf(b, sizeof(b), "%u.%u.%u.%u", (unsigned)(v & 0xff), (unsigned)((v >> 8) & 0xff), (unsigned)((v >> 16) & 0xff),
++                     (unsigned)(v >> 24));
++            return b;
++        }
++        case hxall::ENUM: {
++            const int64_t v = readNum(p, f.size, true);
++            for (int k = 0; k < f.nvals; k++)
++                if (f.vals[k] == v)
++                    return std::to_string(k);
++            return "-1";
++        }
++        default:
++            snprintf(b, sizeof(b), "%lld", (long long)readNum(p, f.size, f.isSigned));
++            return b;
++        }
++    };
++    cb.allSave = [this](int s, const std::vector<std::pair<int, std::string>> &changes) -> int {
++        bool loaded = false;
++        allSection(s, &loaded);
++        if (!loaded)
++            return -1;
++        const hxall::Section &sec = hxall::SECTIONS[s];
++        meshtastic_Config c = allCfg[sec.tag]; // edit a copy: nothing changes unless every value is good
++        meshtastic_ModuleConfig m = allMod[sec.tag];
++        uint8_t *base = sec.module ? (uint8_t *)&m.payload_variant : (uint8_t *)&c.payload_variant;
++        for (const auto &ch : changes) {
++            const hxall::Field &f = hxall::FIELDS[ch.first];
++            uint8_t *p = base + f.offset;
++            const char *t = ch.second.c_str();
++            char *end = nullptr;
++            bool ok = true;
++            switch (f.kind) {
++            case hxall::BOOL:
++                *(bool *)p = ch.second == "1";
++                break;
++            case hxall::FLOAT: {
++                const float v = strtof(t, &end);
++                ok = end != t && *end == 0;
++                if (ok)
++                    *(float *)p = v;
++                break;
++            }
++            case hxall::STR:
++            case hxall::SECRET:
++                if (f.kind == hxall::SECRET && !t[0])
++                    break; // blank: keep the saved one
++                if (ch.second.size() >= f.size)
++                    ok = false;
++                else {
++                    memset(p, 0, f.size);
++                    memcpy(p, t, ch.second.size());
++                }
++                break;
++            case hxall::IP: {
++                unsigned a, b2, c2, d;
++                char x;
++                if (!t[0]) {
++                    *(uint32_t *)p = 0;
++                } else if (sscanf(t, "%u.%u.%u.%u%c", &a, &b2, &c2, &d, &x) == 4 && a < 256 && b2 < 256 && c2 < 256 && d < 256) {
++                    *(uint32_t *)p = a | (b2 << 8) | (c2 << 16) | ((uint32_t)d << 24);
++                } else
++                    ok = false;
++                break;
++            }
++            case hxall::ENUM: {
++                const long k = strtol(t, &end, 10);
++                ok = end != t && k >= 0 && k < f.nvals && writeNum(p, f.size, true, f.vals[k]);
++                break;
++            }
++            default: {
++                const long long v = strtoll(t, &end, 10);
++                ok = end != t && *end == 0 && writeNum(p, f.size, f.isSigned, v);
++                break;
++            }
++            }
++            if (!ok)
++                return ch.first + 1; // which one is wrong (1-based)
++        }
++        meshtastic_AdminMessage a = meshtastic_AdminMessage_init_zero;
++        if (sec.module) {
++            a.which_payload_variant = meshtastic_AdminMessage_set_module_config_tag;
++            a.set_module_config = m;
++            allMod[sec.tag] = m;
++        } else {
++            a.which_payload_variant = meshtastic_AdminMessage_set_config_tag;
++            a.set_config = c;
++            allCfg[sec.tag] = c;
++        }
++        controller->sendAdminMessage(a, ownNode);
++        allApplyLocal(s);
++        return 0;
++    };
++}
++
 +void HopticsView::wireCallbacks(void)
 +{
 +    HopticsUI::Callbacks cb;
++    wireAllSettings(cb);
 +    cb.sendText = [this](uint32_t key, const char *text) -> uint32_t {
 +        uint32_t to = UINT32_MAX;
 +        uint8_t ch = 0;
@@ -12025,6 +12563,42 @@ index 0000000..9c748a3
 +{
 +    return HopticsView::copySnapshot(out);
 +}
+diff --git a/source/graphics/common/ViewController.cpp b/source/graphics/common/ViewController.cpp
+index 98541c7..e9c7aca 100644
+--- a/source/graphics/common/ViewController.cpp
++++ b/source/graphics/common/ViewController.cpp
+@@ -770,6 +770,7 @@ bool ViewController::handleFromRadio(const meshtastic_FromRadio &from)
+             }
+             case meshtastic_FromRadio_config_tag: {
+                 const meshtastic_Config &config = from.config;
++                view->rawConfig(config); // Hoptics: every setting, for Settings > All Meshtastic settings
+                 ILOG_DEBUG("handleFromRadio config subtype=%u", config.which_payload_variant);
+                 delay(5);
+                 switch (config.which_payload_variant) {
+@@ -830,6 +831,7 @@ bool ViewController::handleFromRadio(const meshtastic_FromRadio &from)
+             }
+             case meshtastic_FromRadio_moduleConfig_tag: {
+                 const meshtastic_ModuleConfig &module = from.moduleConfig;
++                view->rawModuleConfig(module); // Hoptics: every module setting
+                 ILOG_DEBUG("handleFromRadio module subtype=%u", module.which_payload_variant);
+                 delay(5);
+                 switch (module.which_payload_variant) {
+@@ -1140,6 +1142,7 @@ bool ViewController::packetReceived(const meshtastic_MeshPacket &p)
+             }
+             case meshtastic_AdminMessage_get_config_response_tag: {
+                 meshtastic_Config &config = admin.get_config_response;
++                view->rawConfig(config);
+                 switch (config.which_payload_variant) {
+                 case meshtastic_Config_device_tag: {
+                     const meshtastic_Config_DeviceConfig &cfg = config.payload_variant.device;
+@@ -1184,6 +1187,7 @@ bool ViewController::packetReceived(const meshtastic_MeshPacket &p)
+             }
+             case meshtastic_AdminMessage_get_module_config_response_tag: {
+                 meshtastic_ModuleConfig &config = admin.get_module_config_response;
++                view->rawModuleConfig(config);
+                 switch (config.which_payload_variant) {
+                 case meshtastic_ModuleConfig_mqtt_tag: {
+                     const meshtastic_ModuleConfig_MQTTConfig &cfg = config.payload_variant.mqtt;
 diff --git a/source/graphics/common/ViewFactory.cpp b/source/graphics/common/ViewFactory.cpp
 index 6a2389a..9aec5ff 100644
 --- a/source/graphics/common/ViewFactory.cpp
