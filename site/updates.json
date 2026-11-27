@@ -4,6 +4,12 @@
     {
       "date": "Nov 2026",
       "tag": "released",
+      "title": "v0.3.2: ThinkNode M9 arrow keys",
+      "text": "On the ThinkNode M9 the arrow keys now move freely, up, down, left and right, to the control that way on screen, including the map's Fit, minus and plus buttons, the tab bar and the Settings gear."
+    },
+    {
+      "date": "Nov 2026",
+      "tag": "released",
       "title": "v0.3.1: All of Meshtastic 2.8, any country",
       "text": "Every Meshtastic 2.8 preset and region, including the ham 70 cm and 1.25 m bands in licensed mode. Pick your country for a legal region, or a local mesh for its settings in one tap. Full MQTT set-up with uplink, map report and more, plus every Meshtastic setting on one page. Steadier touch, and a tap wakes the Heltec V4 screens."
     },

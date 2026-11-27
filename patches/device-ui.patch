@@ -127,10 +127,10 @@ index 98d4bc7..216a76a 100644
  
 diff --git a/include/graphics/view/TFT/HopticsBoard.h b/include/graphics/view/TFT/HopticsBoard.h
 new file mode 100644
-index 0000000..1eff63a
+index 0000000..37d6213
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsBoard.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,57 @@
 +#pragma once
 +/**
 + * Hoptics MT - board facts the UI cannot find out at run time. GPL-3.0, same as device-ui.
@@ -176,6 +176,14 @@ index 0000000..1eff63a
 +constexpr bool kGps = true;
 +#else
 +constexpr bool kGps = false;
++#endif
++
++// The board's arrow keys move the focus by screen position, all four ways (ThinkNode M9: no touch screen).
++// Elsewhere UP / DOWN go through the controls in order and LEFT / RIGHT change tabs.
++#if defined(ELECROW_ThinkNode_M9)
++constexpr bool kArrowKeys = true;
++#else
++constexpr bool kArrowKeys = false;
 +#endif
 +
 +} // namespace board
@@ -864,10 +872,10 @@ index 0000000..3e6006c
 +} // namespace hoptics
 diff --git a/include/graphics/view/TFT/HopticsUI.h b/include/graphics/view/TFT/HopticsUI.h
 new file mode 100644
-index 0000000..f76e709
+index 0000000..210a285
 --- /dev/null
 +++ b/include/graphics/view/TFT/HopticsUI.h
-@@ -0,0 +1,710 @@
+@@ -0,0 +1,714 @@
 +#pragma once
 +/**
 + * Hoptics MT - a from-scratch UI for Meshtastic on small TFT boards: 240x320 portrait touch kits
@@ -925,7 +933,7 @@ index 0000000..f76e709
 +#define HOPTICS_NAME "HOPTICS MT"
 +#endif
 +#ifndef HOPTICS_VERSION
-+#define HOPTICS_VERSION "0.3.1"
++#define HOPTICS_VERSION "0.3.2"
 +#endif
 +
 +class HopticsUI
@@ -1325,6 +1333,10 @@ index 0000000..f76e709
 +    void onKey(lv_event_t *e);
 +    void goBack(void);
 +    void stepTab(int dir);
++    bool spatialMove(uint32_t key); // arrow keys: focus the nearest control that way; false: none
++  public:
++    bool arrowNav = false; // arrow keys move by screen position (set from the board; the harness sets it)
++  private:
 +    void updateKeyContext(void);
 +    void mapZoom(int dir); // +1 in, -1 out, 0 fit
 +    void setMapPan(bool on);
@@ -3628,10 +3640,10 @@ index 0000000..6b086bc
 +} // namespace hoptics
 diff --git a/source/graphics/TFT/HopticsUI.cpp b/source/graphics/TFT/HopticsUI.cpp
 new file mode 100644
-index 0000000..660cea9
+index 0000000..f004877
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsUI.cpp
-@@ -0,0 +1,8039 @@
+@@ -0,0 +1,8096 @@
 +/**
 + * Hoptics MT - UI for Meshtastic on 240x320 (portrait, touch) and 320x240 (landscape, keyboard) TFT boards.
 + * See HopticsUI.h. GPL-3.0.
@@ -4372,6 +4384,7 @@ index 0000000..660cea9
 +
 +HopticsUI::HopticsUI(void)
 +{
++    arrowNav = hoptics::board::kArrowKeys;
 +    envHist = allocEnvHistory(3 * HOPTICS_ENV_HISTORY);
 +    for (uint32_t i = 0; i < kMaxChannels; i++) {
 +        channelNames[i][0] = 0;
@@ -11441,6 +11454,54 @@ index 0000000..660cea9
 +        selectTab(T_HOME);
 +}
 +
++// Arrow-key focus: the nearest shown control in that direction, by the centres of the controls on screen
++// (rows and columns line up, so off-axis distance counts double). The group holds only what is on top.
++bool HopticsUI::spatialMove(uint32_t key)
++{
++    lv_obj_t *cur = keyGroup ? lv_group_get_focused(keyGroup) : nullptr;
++    if (!cur)
++        return false;
++    lv_area_t a;
++    lv_obj_get_coords(cur, &a);
++    const int32_t cx = (a.x1 + a.x2) / 2, cy = (a.y1 + a.y2) / 2;
++    lv_obj_t *best = nullptr;
++    int64_t bestScore = INT64_MAX;
++    for (lv_obj_t *o : scopeStops) {
++        if (o == cur || !shown(o) || lv_obj_has_state(o, LV_STATE_DISABLED))
++            continue;
++        lv_area_t b;
++        lv_obj_get_coords(o, &b);
++        const int32_t dx = (b.x1 + b.x2) / 2 - cx, dy = (b.y1 + b.y2) / 2 - cy;
++        int32_t along, off;
++        switch (key) {
++        case LV_KEY_UP:
++            along = -dy, off = dx;
++            break;
++        case LV_KEY_DOWN:
++            along = dy, off = dx;
++            break;
++        case LV_KEY_LEFT:
++            along = -dx, off = dy;
++            break;
++        default:
++            along = dx, off = dy;
++            break;
++        }
++        if (along < 4) // not that way
++            continue;
++        // in line with this control (their spans overlap across the move) beats anything off to the side
++        const bool inLine = key == LV_KEY_UP || key == LV_KEY_DOWN ? b.x1 <= a.x2 && b.x2 >= a.x1 : b.y1 <= a.y2 && b.y2 >= a.y1;
++        const int64_t score = (inLine ? 0 : (int64_t)1 << 32) + along + 2 * (int64_t)std::abs(off);
++        if (score < bestScore)
++            bestScore = score, best = o;
++    }
++    if (!best)
++        return false;
++    keyFocus(best, true);
++    updateKeyContext();
++    return true;
++}
++
 +void HopticsUI::stepTab(int dir)
 +{
 +    lv_obj_t *f = keyGroup ? lv_group_get_focused(keyGroup) : nullptr;
@@ -11558,6 +11619,10 @@ index 0000000..660cea9
 +    case LV_KEY_DOWN: // keypad only (an encoder's were turned into LEFT / RIGHT above)
 +        if (isScroll && (k == LV_KEY_UP ? lv_obj_get_scroll_top(obj) > 0 : lv_obj_get_scroll_bottom(obj) > 0))
 +            return; // LVGL scrolls it; at the end the keys move on
++        if (!enc && arrowNav && spatialMove(k)) { // arrow keys (ThinkNode M9): up / down on the screen, not in list order
++            done();
++            return;
++        }
 +        if (k == LV_KEY_UP)
 +            lv_group_focus_prev(keyGroup);
 +        else
@@ -11578,7 +11643,11 @@ index 0000000..660cea9
 +        }
 +        if (isSlider)
 +            return; // LVGL changes the value (keypad LEFT / RIGHT, trackball UP / DOWN)
-+        if (onMain)
++        if (!enc && arrowNav && spatialMove(k)) { // arrow keys: the control beside this one
++            done();
++            return;
++        }
++        if (onMain) // nothing that way: the next / previous tab (main screen) or back (a screen on top)
 +            stepTab(k == LV_KEY_LEFT ? -1 : 1);
 +        else if (topOverlay() == wizOv) {
 +            if (k == LV_KEY_LEFT && wizStep > 0)
@@ -11673,7 +11742,7 @@ index 0000000..660cea9
 +}
 diff --git a/source/graphics/TFT/HopticsView.cpp b/source/graphics/TFT/HopticsView.cpp
 new file mode 100644
-index 0000000..465f69e
+index 0000000..035d888
 --- /dev/null
 +++ b/source/graphics/TFT/HopticsView.cpp
 @@ -0,0 +1,1182 @@
@@ -12448,16 +12517,16 @@ index 0000000..465f69e
 +    };
 +    cb.reboot = [this]() { controller->requestReboot(5, ownNode); };
 +    cb.shutdown = [this]() { controller->requestShutdown(5, ownNode); };
-+    // Keyboards that go through device-ui's input policy (ThinkNode M9) have UP / DOWN turned into
-+    // "next / previous control" unless the focused control wants them: an open list, the chat being
-+    // scrolled, the map being panned.
++    // Keyboards that go through device-ui's input policy (ThinkNode M9) would have UP / DOWN turned into
++    // "next / previous control"; Hoptics keeps all four arrows and moves the focus by screen position.
 +    cb.setKeyContext = [](int c) {
 +        using input_policy::FocusSemantic;
 +        auto &ctx = input_policy::InputContextState::instance();
 +        ctx.setFocusSemantic(c == HopticsUI::KC_LIST_OPEN ? FocusSemantic::Dropdown
 +                             : c == HopticsUI::KC_SCROLL  ? FocusSemantic::Scrollable
 +                             : c == HopticsUI::KC_MAP     ? FocusSemantic::Map
-+                                                          : FocusSemantic::Unknown);
++                                                          : FocusSemantic::ButtonMatrix); // arrows stay arrows:
++                                                                                          // Hoptics moves by screen position
 +        ctx.setEditMode(c == HopticsUI::KC_LIST_OPEN);
 +    };
 +    ui.setCallbacks(cb);

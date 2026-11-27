@@ -1240,6 +1240,41 @@ int main(int argc, char **argv)
         ui.setTheme(0);
         ui.keyCommand(HopticsUI::KEY_HOME);
 
+        { // ThinkNode M9 arrows: all four move the focus by screen position
+            ui.arrowNav = true;
+            ui.selectTab(HopticsUI::T_MAP);
+            pump(50);
+            lv_obj_t *bar = lv_obj_get_parent(ui.mapRange);
+            lv_obj_t *fit = lv_obj_get_child(bar, 0), *minus = lv_obj_get_child(bar, 1), *plus = lv_obj_get_child(bar, 2);
+            ui.keyScope(ui.mapArea);
+            pump(20);
+            expect(focused() == ui.mapArea, "arrows: on the map");
+            key(LV_KEY_UP);
+            expect(focused() == fit || focused() == minus || focused() == plus, "arrows: UP from the map reaches the zoom bar");
+            ui.keyScope(fit);
+            pump(20);
+            key(LV_KEY_RIGHT);
+            expect(focused() == minus, "arrows: RIGHT from Fit: minus");
+            key(LV_KEY_RIGHT);
+            expect(focused() == plus, "arrows: RIGHT again: plus");
+            const int z = ui.mapZ;
+            key(LV_KEY_ENTER);
+            expect(ui.mapZ == z + 1, "arrows: ENTER on plus zooms in");
+            key(LV_KEY_LEFT);
+            key(LV_KEY_LEFT);
+            expect(focused() == fit && ui.activeTab == HopticsUI::T_MAP, "arrows: LEFT back to Fit, still on the map");
+            kshot("78_keys_m9_map_zoom_bar");
+            key(LV_KEY_DOWN);
+            expect(focused() == ui.mapArea, "arrows: DOWN onto the map");
+            key(LV_KEY_DOWN);
+            expect(lv_obj_get_parent(focused()) == ui.navBar, "arrows: DOWN again: the tab bar");
+            lv_obj_t *t0 = focused();
+            key(lv_obj_get_width(ui.navBar) > lv_obj_get_height(ui.navBar) ? LV_KEY_RIGHT : LV_KEY_DOWN); // along the bar
+            expect(lv_obj_get_parent(focused()) == ui.navBar && focused() != t0, "arrows: along the tabs");
+            kshot("78b_keys_m9_tabs");
+            ui.arrowNav = false;
+            ui.keyCommand(HopticsUI::KEY_HOME);
+        }
         // keyboard plus touch screen (T-Deck Plus): a tap hides the ring, the next key brings it back
         lv_indev_t *touch = lv_indev_create();
         lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);

@@ -243,6 +243,9 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
+v0.3.2: on the **ThinkNode M9** the arrow keys move the focus freely by screen position, all four ways
+(the map's zoom buttons, the tab bar, the Settings gear).
+
 v0.3.1: **every Meshtastic 2.8 preset and region**, each region with exactly the presets it allows, including
 the ham 70 cm and 1.25 m bands (licensed mode). A **country picker** sets a legal region, and **local mesh**
 presets set region, preset and slot for community meshes in one tap. **Full MQTT set-up** (uplink, downlink,
