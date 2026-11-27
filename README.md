@@ -243,6 +243,13 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
+v0.3.1: **every Meshtastic 2.8 preset and region**, each region with exactly the presets it allows, including
+the ham 70 cm and 1.25 m bands (licensed mode). A **country picker** sets a legal region, and **local mesh**
+presets set region, preset and slot for community meshes in one tap. **Full MQTT set-up** (uplink, downlink,
+encryption, TLS, JSON, map report, proxy, OK to MQTT) and **all Meshtastic settings** on one page. Steadier
+touch on the Heltec V4 kits and T-Deck, and **tap to wake** on the V4 kits. Receive-only mode, signed-packet
+policy and the 24-byte long-name limit.
+
 v0.3.0: the **LilyGO T-Deck Plus** and the **Elecrow ThinkNode M9** (beta): a 320x240 landscape layout, full
 keyboard and trackball control, a GPS switch in Settings, and the M9's location key (a new Location card).
 Radios on USB or a charger now stay awake with the screen off (light sleep only on battery).
