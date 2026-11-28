@@ -1,13 +1,13 @@
 {
   "name": "Hoptics M7 observer + repeater (Elecrow ThinkNode M7)",
-  "version": "0.3.4",
+  "version": "0.4.1",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 0,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        { "path": "hoptics-m7-observer-repeater-0.3.4.factory.bin", "offset": 0 }
+        { "path": "hoptics-m7-observer-repeater-0.4.1.factory.bin", "offset": 0 }
       ]
     }
   ]
