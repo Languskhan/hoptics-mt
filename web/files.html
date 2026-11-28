@@ -101,7 +101,10 @@ async function open(p) {
   }
   if (d.more) list.append(el("p", "note", "Only the first 1000 entries are shown."));
 }
-function say(m, bad) { $("msg").textContent = m; $("msg").className = "note" + (bad ? " err" : ""); }
+function say(m, bad) { // shown where the user is looking: on the code box until the card has opened
+  const t = $("app").classList.contains("hidden") ? $("lmsg") : $("msg");
+  t.textContent = m; t.className = "note" + (bad ? " err" : "");
+}
 async function go(p) { try { say(""); await open(p); } catch (e) { if (e.message !== "signed out") say(e.message, true); } }
 async function download(p, name) {
   try { const r = await call("/hoptics/fs/get?path=" + encodeURIComponent(p)); const a = el("a"); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
@@ -126,7 +129,7 @@ async function upload(list) {
   } catch (e) { if (e.message !== "signed out") say("Stopped: " + e.message, true); }
   $("prog").classList.add("hidden"); $("pbar").style.width = "0"; go(cwd);
 }
-$("go").onclick = () => { code = $("code").value.trim(); sessionStorage.setItem("hxcode", code); go(cwd); };
+$("go").onclick = () => { code = $("code").value.trim(); sessionStorage.setItem("hxcode", code); say("Opening..."); go(cwd); };
 $("code").onkeydown = (e) => { if (e.key === "Enter") $("go").click(); };
 $("up").onclick = () => go(cwd.replace(/\/[^/]*$/, "") || "/");
 $("mk").onclick = async () => {

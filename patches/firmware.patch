@@ -373,7 +373,7 @@ index 3590cfd..319d1e6 100644
                  LOG_DEBUG("Got client heartbeat");
              }
 diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
-index 7f9fbc4..4ec41e7 100644
+index 7f9fbc4..b66b88f 100644
 --- a/src/mesh/http/ContentHandler.cpp
 +++ b/src/mesh/http/ContentHandler.cpp
 @@ -38,6 +38,25 @@
@@ -514,7 +514,7 @@ index 7f9fbc4..4ec41e7 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
      // res->setHeader("Content-Type", "text/html");
  
-@@ -924,3 +955,343 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+@@ -924,3 +955,341 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
      writeAll(res, out);
  }
  #endif
@@ -679,11 +679,9 @@ index 7f9fbc4..4ec41e7 100644
 +    std::string out = "{\"path\":";
 +    jsonStr(out, p.c_str());
 +    {
-+        concurrency::LockGuard g(spiLock);
-+        char b[64];
-+        snprintf(b, sizeof(b), ",\"total\":%llu,\"used\":%llu,\"items\":[", (unsigned long long)SD.totalBytes(),
-+                 (unsigned long long)SD.usedBytes());
-+        out += b;
++        concurrency::LockGuard g(spiLock); // (printf here has no 64-bit numbers: std::to_string does them)
++        out += ",\"total\":" + std::to_string((unsigned long long)SD.totalBytes()) +
++               ",\"used\":" + std::to_string((unsigned long long)SD.usedBytes()) + ",\"items\":[";
 +    }
 +    File dir;
 +    {
