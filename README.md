@@ -192,6 +192,10 @@ Short version (details and sources in [docs/SECURITY.md](docs/SECURITY.md)):
 - The `/hoptics` page and `/json/hoptics` are read-only and send strict browser security headers. All
   names and messages are rendered as plain text; a hostile node name or message can't inject script
   (tested).
+- The dashboard and Files over Wi-Fi answer only when the browser asks for the radio by its own address (an IP,
+  a `.local` name or a one-word name), so a website can't point its own name at your radio (DNS rebinding) to
+  read the dashboard from your browser. The Files code must be exactly the six digits on the screen.
+- The dashboard is plain HTTP: anyone on the same Wi-Fi can read it, and the Files code while you use it.
 - **Direct messages are never exported** to the web page or bridge. Channel chat is only shared if you
   switch on Settings → Web page → "Show channel chat on web".
 - Bluetooth pairing uses a **new random 6-digit PIN** each time you enable it, shown in Settings.

@@ -81,3 +81,15 @@ https://meshtastic.org/docs/software/apple/user/mqtt/
   user-generated content: https://docs.discord.com/developers/resources/webhook
 - Discord markdown in mesh text is escaped, posts are truncated, and HTTP 429 rate limits are honoured.
   **Tested** against a fake endpoint: `@everyone` arrived with mentions disabled and `**bold**` escaped.
+
+## 7. DNS rebinding and the Files code
+
+- A website can point its own domain name at your radio's local address after your browser has loaded it
+  (DNS rebinding), and then read anything the radio serves without a login. Every Hoptics handler (`/hoptics`,
+  `/json/hoptics`, `/`, Files over Wi-Fi) now checks the `Host` header and answers only to an IP address, a
+  one-word name, or a name under `.local`, `.lan`, `.home`, `.home.arpa`, `.internal` or `.localdomain`, which no
+  one can register on the internet. Anything else gets `421 Misdirected Request`.
+- The Files code in `X-Hoptics-Code` must be exactly the six digits on the screen (`"123456x"` used to pass as
+  123456), and it's compared in constant time.
+- The dashboard is plain HTTP, so anyone on the same Wi-Fi can read it, and the Files code while it's in use.
+  Turn Files over Wi-Fi on only on a network you trust; it turns itself off after 15 minutes unused.

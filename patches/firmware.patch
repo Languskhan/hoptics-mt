@@ -373,7 +373,7 @@ index 3590cfd..319d1e6 100644
                  LOG_DEBUG("Got client heartbeat");
              }
 diff --git a/src/mesh/http/ContentHandler.cpp b/src/mesh/http/ContentHandler.cpp
-index 7f9fbc4..b66b88f 100644
+index 7f9fbc4..bfeea74 100644
 --- a/src/mesh/http/ContentHandler.cpp
 +++ b/src/mesh/http/ContentHandler.cpp
 @@ -38,6 +38,25 @@
@@ -514,7 +514,7 @@ index 7f9fbc4..b66b88f 100644
      res->setHeader("Access-Control-Allow-Methods", "GET");
      // res->setHeader("Content-Type", "text/html");
  
-@@ -924,3 +955,341 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
+@@ -924,3 +955,393 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
      writeAll(res, out);
  }
  #endif
@@ -528,11 +528,55 @@ index 7f9fbc4..b66b88f 100644
 +    res->setHeader("Referrer-Policy", "no-referrer");
 +}
 +
-+static void handleHopticsPage(HTTPRequest *req, HTTPResponse *res)
++// The Host header names this radio on the local network: an IP address, a one-word name, or a name under .local,
++// .lan, .home, .home.arpa, .internal or .localdomain. Anything else is a website that pointed its own name at the
++// radio's address (DNS rebinding) to read the dashboard (positions, nodes, chat) from a visitor's browser
++static bool hopticsLocalHost(const std::string &host)
++{
++    if (host.empty() || host[0] == '[') // no header (not a browser), or an IPv6 address
++        return true;
++    std::string h = host.substr(0, host.find(':'));
++    if (h.empty() || h.size() > 63)
++        return false;
++    bool digits = true, dot = false;
++    for (char &c : h) {
++        if (c >= 'A' && c <= 'Z')
++            c = (char)(c - 'A' + 'a');
++        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.'))
++            return false;
++        digits = digits && ((c >= '0' && c <= '9') || c == '.');
++        dot = dot || c == '.';
++    }
++    if (h.back() == '.')
++        h.pop_back();
++    if (digits || !dot)
++        return true;
++    for (const char *s : {".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain"}) {
++        const size_t n = strlen(s);
++        if (h.size() > n && h.compare(h.size() - n, n, s) == 0)
++            return true;
++    }
++    return false;
++}
++
++// every Hoptics handler starts here: the headers, and a refusal for a request under another site's name
++static bool hopticsGuard(HTTPRequest *req, HTTPResponse *res)
 +{
 +    if (webServerThread)
 +        webServerThread->markActivity();
 +    hopticsSecurityHeaders(res);
++    if (hopticsLocalHost(req->getHeader("Host")))
++        return true;
++    res->setStatusCode(421);
++    res->setHeader("Content-Type", "text/plain");
++    res->print("Open the dashboard by the radio's own address");
++    return false;
++}
++
++static void handleHopticsPage(HTTPRequest *req, HTTPResponse *res)
++{
++    if (!hopticsGuard(req, res))
++        return;
 +    // the page only talks to this node; inline code is ours and renders data with textContent only
 +    res->setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
 +                                              "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
@@ -543,9 +587,8 @@ index 7f9fbc4..b66b88f 100644
 +
 +static void handleHopticsJson(HTTPRequest *req, HTTPResponse *res)
 +{
-+    if (webServerThread)
-+        webServerThread->markActivity();
-+    hopticsSecurityHeaders(res);
++    if (!hopticsGuard(req, res))
++        return;
 +    std::string snap;
 +    if (!hoptics_copy_snapshot(snap)) {
 +        res->setStatusCode(503);
@@ -560,7 +603,8 @@ index 7f9fbc4..b66b88f 100644
 +
 +static void handleHopticsRoot(HTTPRequest *req, HTTPResponse *res)
 +{
-+    hopticsSecurityHeaders(res);
++    if (!hopticsGuard(req, res))
++        return;
 +    res->setStatusCode(302);
 +    res->setHeader("Location", "/hoptics");
 +    res->setHeader("Content-Type", "text/plain");
@@ -589,9 +633,8 @@ index 7f9fbc4..b66b88f 100644
 +
 +static bool filesAuth(HTTPRequest *req, HTTPResponse *res)
 +{
-+    if (webServerThread)
-+        webServerThread->markActivity();
-+    hopticsSecurityHeaders(res);
++    if (!hopticsGuard(req, res))
++        return false;
 +    const uint32_t code = hoptics_files_code();
 +    if (!code) {
 +        filesJson(res, 403, "{\"error\":\"Turn on Files over Wi-Fi on the radio (Settings > Storage)\"}");
@@ -601,7 +644,15 @@ index 7f9fbc4..b66b88f 100644
 +        filesJson(res, 429, "{\"error\":\"Too many wrong codes: wait a minute\"}");
 +        return false;
 +    }
-+    if (strtoul(req->getHeader("X-Hoptics-Code").c_str(), nullptr, 10) != code) {
++    // exactly the six digits on the screen ("123456x" or " 123456" is no code), compared in the same time whatever
++    // they are
++    char want[8];
++    snprintf(want, sizeof(want), "%06lu", (unsigned long)code);
++    const std::string got = req->getHeader("X-Hoptics-Code");
++    uint8_t diff = got.size() != 6;
++    for (size_t i = 0; i < 6; i++)
++        diff |= (uint8_t)(want[i] ^ (i < got.size() ? got[i] : 0));
++    if (diff) {
 +        if (++filesBad >= 5) {
 +            filesBad = 0;
 +            filesLockedUntil = millis() + 60000;
@@ -661,7 +712,8 @@ index 7f9fbc4..b66b88f 100644
 +
 +static void handleFilesPage(HTTPRequest *req, HTTPResponse *res)
 +{
-+    hopticsSecurityHeaders(res);
++    if (!hopticsGuard(req, res))
++        return;
 +    res->setHeader("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
 +                                              "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
 +                                              "form-action 'none'; frame-ancestors 'none'");
