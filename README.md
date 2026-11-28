@@ -243,6 +243,8 @@ For a two-way Discord bot or MQTT-based logging there are mature projects alread
 
 ## Status
 
+v0.3.3: **SD card**: map tiles are kept on the card, and ready-made map packs show (Meshtastic's /maps/<style>, /map, or MeshCore's /tiles). **Files over Wi-Fi** (Settings > Storage): browse, upload (files or whole folders), download and delete on the card from a browser, with a code shown on the radio; off by itself after 15 minutes unused or a restart. **Tap to wake** on the Heltec V4 kits.
+
 v0.3.2: on the **ThinkNode M9** the arrow keys move the focus freely by screen position, all four ways
 (the map's zoom buttons, the tab bar, the Settings gear).
 

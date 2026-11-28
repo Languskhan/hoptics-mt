@@ -4,6 +4,12 @@
     {
       "date": "Nov 2026",
       "tag": "released",
+      "title": "v0.3.3: SD card maps and Files over Wi-Fi",
+      "text": "On radios with a card slot (Heltec V4-R8, T-Deck Plus, ThinkNode M9) the map keeps its tiles on the SD card and shows ready-made map packs from Meshtastic or MeshCore. Settings > Storage turns on Files over Wi-Fi: manage the card from a browser with a code shown on the radio. Tap to wake on the Heltec V4 kits."
+    },
+    {
+      "date": "Nov 2026",
+      "tag": "released",
       "title": "v0.3.2: ThinkNode M9 arrow keys",
       "text": "On the ThinkNode M9 the arrow keys now move freely, up, down, left and right, to the control that way on screen, including the map's Fit, minus and plus buttons, the tab bar and the Settings gear."
     },
